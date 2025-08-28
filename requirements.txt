@@ -8,5 +8,6 @@ pip
 python-dotenv
 ruff
 scikit-learn
--e .
 torch
+d2l
+-e .

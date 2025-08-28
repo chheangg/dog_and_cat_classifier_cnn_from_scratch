@@ -3,7 +3,7 @@
 #################################################################################
 
 PROJECT_NAME = dog_and_cat_classifier_cnn_from_scratch
-PYTHON_VERSION = 3.13
+PYTHON_VERSION = 3.10
 PYTHON_INTERPRETER = python
 
 #################################################################################
