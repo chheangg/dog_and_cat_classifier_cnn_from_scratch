@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 from d2l import torch as d2l
