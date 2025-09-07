@@ -68,12 +68,6 @@ class SoftmaxRegression(d2l.Classifier):
     def forward(self, X):
         X = X.reshape((-1, self.net.w.shape[0]))
         return softmax(torch.matmul(X, self.net.w) + self.net.b)
-    
-    def loss(self, y_hat, y):
-        return CrossEntropyError(y_hat, y)
-
-    def configure_optimizers(self):
-        return SGDFromScratch(self.parameters(), self.lr)
 
 # models from 2.0-cnn-layer.ipynb
 class Conv2D(d2l.Module):
@@ -130,7 +124,7 @@ class Conv2D(d2l.Module):
         # return result
             
         # unfold X into flattened_kernel_size * patches
-        unfolded_X = F.unfold(X, kernel_size=(k, k), padding=0, stride=s)
+        unfolded_X = F.unfold(X, kernel_size=k, stride=s)
         
         # unfold weight into out_channel * flattened_kernel_size
         unfolded_weight = self.w.view(self.out_channels, -1)
@@ -157,7 +151,7 @@ class MaxPool2d(d2l.Module):
 
     def forward(self, X):
         # Unfold the tensor into patches
-        unfolded_X = F.unfold[:](X, kernel_size=self.kernel_size, padding=self.padding, stride=self.stride)
+        unfolded_X = F.unfold(X, kernel_size=self.kernel_size, padding=self.padding, stride=self.stride)
         
         batch_size, _, L = unfolded_X.shape
         channels = X.shape[1]
@@ -182,6 +176,20 @@ class MaxPool2d(d2l.Module):
         
         return output
 
+class GlobalAvgPool2d(d2l.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return X.mean(dim=[2, 3], keepdim=True)
+    
+class ReLU(d2l.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return torch.max(torch.tensor(0.0), X)
+
 class Dropout(d2l.Module):
     def __init__(self, p=0.5):
         super().__init__()
@@ -204,3 +212,154 @@ class Dropout(d2l.Module):
         
         # rescale
         return X / (1 - self.p)
+    
+# models from 3.0-resnet-architecture.ipynb
+
+# The following definitions are a direct copy from the d2l, I'm too lazy to work this one out
+def batch_norm(X, gamma, beta, moving_mean, moving_var, eps, momentum):
+    # Use is_grad_enabled to determine whether we are in training mode
+    if not torch.is_grad_enabled():
+        # In prediction mode, use mean and variance obtained by moving average
+        X_hat = (X - moving_mean) / torch.sqrt(moving_var + eps)
+    else:
+        assert len(X.shape) in (2, 4)
+        if len(X.shape) == 2:
+            # When using a fully connected layer, calculate the mean and
+            # variance on the feature dimension
+            mean = X.mean(dim=0)
+            var = ((X - mean) ** 2).mean(dim=0)
+        else:
+            # When using a two-dimensional convolutional layer, calculate the
+            # mean and variance on the channel dimension (axis=1). Here we
+            # need to maintain the shape of X, so that the broadcasting
+            # operation can be carried out later
+            mean = X.mean(dim=(0, 2, 3), keepdim=True)
+            var = ((X - mean) ** 2).mean(dim=(0, 2, 3), keepdim=True)
+        # In training mode, the current mean and variance are used
+        X_hat = (X - mean) / torch.sqrt(var + eps)
+        # Update the mean and variance using moving average
+        moving_mean = (1.0 - momentum) * moving_mean + momentum * mean
+        moving_var = (1.0 - momentum) * moving_var + momentum * var
+    Y = gamma * X_hat + beta  # Scale and shift
+    return Y, moving_mean.data, moving_var.data
+
+class BatchNorm2d(d2l.Module):    
+    # num_features: the number of outputs for a fully connected layer or the
+    # number of output channels for a convolutional layer. num_dims: 2 for a
+    # fully connected layer and 4 for a convolutional layer
+    def __init__(self, num_features, num_dims):
+        super().__init__()
+        if num_dims == 2:
+            shape = (1, num_features)
+        else:
+            shape = (1, num_features, 1, 1)
+        # The scale parameter and the shift parameter (model parameters) are
+        # initialized to 1 and 0, respectively
+        self.gamma = nn.Parameter(torch.ones(shape))
+        self.beta = nn.Parameter(torch.zeros(shape))
+        # The variables that are not model parameters are initialized to 0 and
+        # 1
+        self.moving_mean = torch.zeros(shape)
+        self.moving_var = torch.ones(shape)
+
+    def forward(self, X):
+        # If X is not on the main memory, copy moving_mean and moving_var to
+        # the device where X is located
+        if self.moving_mean.device != X.device:
+            self.moving_mean = self.moving_mean.to(X.device)
+            self.moving_var = self.moving_var.to(X.device)
+        # Save the updated moving_mean and moving_var
+        Y, self.moving_mean, self.moving_var = batch_norm(
+            X, self.gamma, self.beta, self.moving_mean,
+            self.moving_var, eps=1e-5, momentum=0.1)
+        return Y
+    
+class ResNetLayer(d2l.Module):
+    def __init__(self, in_channels, out_channels, use_1x1conv=False, strides=1):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        self.ReLU = ReLU()
+        
+        self.conv1 = Conv2D(in_channels, out_channels, kernel_size=1, stride=strides)
+        self.bn1 = BatchNorm2d(out_channels, 4)
+        self.conv2 = Conv2D(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = BatchNorm2d(out_channels, 4)
+        self.conv3 = Conv2D(out_channels, out_channels * 4, kernel_size=1)
+        self.bn3 = BatchNorm2d(out_channels * 4, 4)
+        
+        # Skip connection to match input/output dimensions if needed
+        if use_1x1conv or in_channels != out_channels * 4:
+            self.conv4 = Conv2D(in_channels, out_channels * 4, kernel_size=1, stride=strides)
+            self.bn4 = BatchNorm2d(out_channels * 4, 4)
+        else:
+            self.conv4 = None
+        
+        self.ReLU = ReLU()
+    
+    def forward(self, X):
+        Y = self.ReLU(self.bn1(self.conv1(X)))
+        Y = self.ReLU(self.bn2(self.conv2(Y)))
+        Y = self.bn3(self.conv3(Y))
+        
+        # add skip connection
+        if self.conv4:
+            X = self.bn4(self.conv4(X))
+            
+        Y += X
+        
+        return self.ReLU(Y)
+
+class ResNet50(d2l.Classifier):
+    def __init__(self, num_classes, lr,  in_channels=1):
+        super().__init__()
+        self.lr = lr
+        self.bias = True
+        self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2)
+        self.pool1 = MaxPool2d(kernel_size=3, stride=2)
+        self.conv2 = nn.Sequential(
+            ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True),
+            ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True),
+            ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True)
+        )
+        self.conv3 = nn.Sequential(
+            ResNetLayer(in_channels=256, out_channels=128, use_1x1conv=True),
+            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True),
+            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True),
+            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True)
+        )
+        self.conv4 = nn.Sequential(
+            ResNetLayer(in_channels=512, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+        )
+        self.conv5 = nn.Sequential(
+            ResNetLayer(in_channels=1024, out_channels=512, use_1x1conv=True),
+            ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
+            ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
+        )
+        self.pool2 = GlobalAvgPool2d()
+        self.fc = LinearRegression(in_features=2048, out_features=1000, lr=self.lr, bias=self.bias)
+        self.softmax = SoftmaxRegression(1000, num_classes, lr=self.lr, bias=self.bias)
+    
+    def forward(self, X):
+        Y = self.pool1(self.conv1(X))
+        Y = self.conv2(Y)
+        Y = self.conv3(Y)
+        Y = self.conv4(Y)
+        Y = self.conv5(Y)
+        Y = self.pool2(Y)
+        Y = Y.reshape(Y.shape[0], -1)
+        Y = self.softmax(self.fc(Y))
+        return Y
+        
+        
+    def loss(self, y_hat, y):
+        return CrossEntropyError(y_hat, y)
+    
+    def configure_optimizers(self):
+        return SGDFromScratch(self.parameters(), self.lr)
