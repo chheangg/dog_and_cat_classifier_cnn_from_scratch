@@ -89,13 +89,13 @@ class Conv2D(d2l.Module):
         s = self.stride
         k = self.kernel_size
         
-        # if padding gt 1
-        if p > 0:
-            batch_size, channels, height, width = X.shape
-            padded_tensor = torch.zeros((batch_size, channels, height + 2 * p, width + 2 * p),
-                                        dtype=X.dtype, device=X.device)
-            padded_tensor[:, :, p:height + p, p:width + p] = X
-            X = padded_tensor
+        # # if padding gt 1
+        # if p > 0:
+        #     batch_size, channels, height, width = X.shape
+        #     padded_tensor = torch.zeros((batch_size, channels, height + 2 * p, width + 2 * p),
+        #                                 dtype=X.dtype, device=X.device)
+        #     padded_tensor[:, :, p:height + p, p:width + p] = X
+        #     X = padded_tensor
             
         ## NAIVE IMPLEMENTATION, SUPER SLOW!!
         # # Output size calculation
@@ -124,7 +124,7 @@ class Conv2D(d2l.Module):
         # return result
             
         # unfold X into flattened_kernel_size * patches
-        unfolded_X = F.unfold(X, kernel_size=k, stride=s)
+        unfolded_X = F.unfold(X, kernel_size=k, stride=s, padding=p)
         
         # unfold weight into out_channel * flattened_kernel_size
         unfolded_weight = self.w.view(self.out_channels, -1)
@@ -134,8 +134,8 @@ class Conv2D(d2l.Module):
         
         # Calculate output dimensions
         batch_size, _, input_height, input_width = X.shape
-        output_height = (input_height - k) // s + 1
-        output_width = (input_width - k) // s + 1
+        output_height = (input_height - k + 2 * p) // s + 1
+        output_width = (input_width - k + 2 * p) // s + 1
         
         # Reshape the output matrix to the correct tensor shape
         output_tensor = output_matrix.view(batch_size, self.out_channels, output_height, output_width)
