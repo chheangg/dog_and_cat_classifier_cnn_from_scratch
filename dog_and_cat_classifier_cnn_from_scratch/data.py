@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import random
 import cv2
 import json
+from torch.utils.data import Dataset
+import torch
 
 raw_folder = '../data/raw'
 
@@ -87,7 +89,7 @@ def save_metadata(metadata, outpath="../data/processed/metadata.json"):
         
 class CatAndDogDataset(Dataset):
     def __init__(self, img_dir, transform=None, target_transform=None):
-        with open("../data/processed/metadata.json", "r") as f:
+        with open(img_dir + "/metadata.json", "r") as f:
             metadata = json.load(f)
         self.metadata = metadata
         self.img_dir = img_dir
@@ -108,6 +110,8 @@ class CatAndDogDataset(Dataset):
         # load image with cv2
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # OpenCV loads BGR
+        
+        image = torch.from_numpy(image).permute(2, 0, 1).float()
         
         # parse label from filename ("1-cat.jpg" -> "cat")
         label_str = img_name.split("-")[1].split(".")[0]  # "cat" or "dog"
