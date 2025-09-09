@@ -9,7 +9,9 @@ python-dotenv
 ruff
 scikit-learn
 torch
-d2l
+d2l==1.0.3
 kaggle
+opencv-python
+torchvision
 opencv-python
 -e .
