@@ -10,4 +10,6 @@ ruff
 scikit-learn
 torch
 d2l
+kaggle
+opencv-python
 -e .
