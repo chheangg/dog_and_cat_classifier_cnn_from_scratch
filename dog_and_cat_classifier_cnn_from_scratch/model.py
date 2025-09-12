@@ -196,22 +196,18 @@ class Dropout(d2l.Module):
         self.p = p
         
     def forward(self, X):
-        # if not training
+        # During inference, just return X unchanged
         if not self.training:
-            # return x
             return X
         
-        # get dimensions
-        batch_size, channels, height, width = X.shape
+        # Create a mask with the same shape as X
+        mask = (torch.rand(X.shape, device=X.device) > self.p).float()
         
-        # create random tensor
-        indices = torch.rand((batch_size, channels, height, width))
-
-        # select all of those where the values are less than the set probability
-        X = X * (indices > self.p).float()
-        
-        # rescale
-        return X / (1 - self.p)
+        # Apply the mask and scale to maintain the expected value
+        return X * mask / (1 - self.p)
+    
+def L2Regularization(w, lambd):
+    return (lambd / 2) * torch.norm(w, 2) ** 2
     
 # models from 3.0-resnet-architecture.ipynb
 
@@ -312,12 +308,14 @@ class ResNetLayer(d2l.Module):
         return self.ReLU(Y)
 
 class ResNet50(d2l.Classifier):
-    def __init__(self, num_classes, lr,  in_channels=1):
+    def __init__(self, num_classes, lr,  in_channels=1, dropout_rate=0.5):
         super().__init__()
         self.lr = lr
         self.bias = True
+        self.dropout_rate = dropout_rate
         self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2)
         self.pool1 = MaxPool2d(kernel_size=3, stride=2)
+        self.dropout1 = Dropout(dropout_rate=dropout_rate)
         self.conv2 = nn.Sequential(
             ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True),
             ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True),
@@ -342,19 +340,30 @@ class ResNet50(d2l.Classifier):
             ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
             ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
         )
-        self.pool2 = GlobalAvgPool2d()
+        self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
+        self.dropout2 = Dropout(self.dropout_rate)
         self.fc = LinearRegression(in_features=2048, out_features=1000, lr=self.lr, bias=self.bias)
+        self.dropout3 = Dropout(self.dropout_rate * 0.5)
         self.softmax = SoftmaxRegression(1000, num_classes, lr=self.lr, bias=self.bias)
     
     def forward(self, X):
         Y = self.pool1(self.conv1(X))
+        Y = self.dropout1(Y)  # Dropout after initial feature extraction
+        
         Y = self.conv2(Y)
         Y = self.conv3(Y)
         Y = self.conv4(Y)
         Y = self.conv5(Y)
+        
         Y = self.pool2(Y)
         Y = Y.reshape(Y.shape[0], -1)
-        Y = self.softmax(self.fc(Y))
+        
+        Y = self.dropout2(Y)
+        
+        Y = self.fc(Y)
+        Y = self.dropout3(Y)
+        
+        Y = self.softmax(Y)
         return Y
         
         

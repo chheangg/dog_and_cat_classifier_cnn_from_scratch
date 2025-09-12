@@ -8,6 +8,7 @@ import cv2
 import json
 from torch.utils.data import Dataset
 import torch
+from torchvision import transforms 
 
 raw_folder = '../data/raw'
 
@@ -88,7 +89,7 @@ def save_metadata(metadata, outpath="../data/processed/metadata.json"):
         json.dump(metadata, f, indent=4)
         
 class CatAndDogDataset(Dataset):
-    def __init__(self, img_dir, transform=None, target_transform=None):
+    def __init__(self, img_dir, transform=None, target_transform=None, train=True):
         with open(img_dir + "/metadata.json", "r") as f:
             metadata = json.load(f)
         self.metadata = metadata
@@ -96,9 +97,33 @@ class CatAndDogDataset(Dataset):
         self.img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(".jpg")],
                                 key=lambda x: int(x.split('-')[0])) # Sort files by their numerical ID
         
+        self.train = train
         self.transform = transform
         self.target_transform = target_transform
         self.class_map = {"cat": 0, "dog": 1}
+        
+        # If no transform provided, use appropriate defaults
+        if self.transform is None:
+            self.transform = self.get_default_transforms(train)
+    
+    def get_default_transforms(self, train=True):
+        if train:
+            # Training transforms with heavy augmentation
+            return transforms.Compose([
+                transforms.Lambda(lambda x: x / 255.0),  # Normalize to [0, 1]
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(degrees=15),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+                transforms.RandomGrayscale(p=0.1),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else:
+            # Validation transforms (only normalization)
+            return transforms.Compose([
+                transforms.Lambda(lambda x: x / 255.0),  # Normalize to [0, 1]
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
     
     def __len__(self):
         return self.metadata['num_images']
