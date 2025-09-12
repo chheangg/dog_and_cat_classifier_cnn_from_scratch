@@ -8,7 +8,7 @@ from datetime import datetime
 from torchvision import transforms
 
 # --- Import your custom modules ---
-from model import ResNet50
+from model import ResNet50, L2Regularization
 from data import CatAndDogDataset
 
 # --- Memory Optimization Setup ---
@@ -214,9 +214,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             l2_lambda = 1e-4  # L2 regularization strength
             l2_reg = torch.tensor(0., device=device)
             for param in model.parameters():
-                l2_reg += torch.sum(param ** 2)  # Sum of squares of all weights
+                l2_reg += L2Regularization(param, l2_reg)
             
-            loss = loss + (l2_lambda / 2) * l2_reg  # Standard L2 formulation
+            loss = loss + l2_reg
             loss = loss / GRADIENT_ACCUMULATION_STEPS
         
         scaler.scale(loss).backward()
