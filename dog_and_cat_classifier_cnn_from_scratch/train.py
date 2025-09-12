@@ -128,7 +128,7 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
     return final_path
 
 # --- Instantiate Model ---
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3).to(device)
+model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
 # Use model's own optimizer and loss function
 optimizer = model.configure_optimizers()
