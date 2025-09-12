@@ -315,7 +315,7 @@ class ResNet50(d2l.Classifier):
         self.dropout_rate = dropout_rate
         self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2)
         self.pool1 = MaxPool2d(kernel_size=3, stride=2)
-        self.dropout1 = Dropout(dropout_rate=dropout_rate)
+        self.dropout1 = Dropout(p=dropout_rate)
         self.conv2 = nn.Sequential(
             ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True),
             ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True),
@@ -341,9 +341,9 @@ class ResNet50(d2l.Classifier):
             ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
         )
         self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
-        self.dropout2 = Dropout(self.dropout_rate)
+        self.dropout2 = Dropout(p=self.dropout_rate)
         self.fc = LinearRegression(in_features=2048, out_features=1000, lr=self.lr, bias=self.bias)
-        self.dropout3 = Dropout(self.dropout_rate * 0.5)
+        self.dropout3 = Dropout(p=self.dropout_rate * 0.5)
         self.softmax = SoftmaxRegression(1000, num_classes, lr=self.lr, bias=self.bias)
     
     def forward(self, X):

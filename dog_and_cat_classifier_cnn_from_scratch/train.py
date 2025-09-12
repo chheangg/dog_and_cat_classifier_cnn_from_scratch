@@ -17,7 +17,7 @@ torch.backends.cudnn.benchmark = True
 
 # --- Hyperparameters ---
 LEARNING_RATE = 0.01
-NUM_EPOCHS = 90
+NUM_EPOCHS = 50
 BATCH_SIZE = 8
 NUM_CLASSES = 2
 GRADIENT_ACCUMULATION_STEPS = 16
