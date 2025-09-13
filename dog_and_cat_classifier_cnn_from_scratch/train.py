@@ -1,335 +1,194 @@
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import gc
 import os
-import json
 from datetime import datetime
-from torchvision import transforms
-import math
-from torch import nn
+import matplotlib.pyplot as plt
 
+# Import your custom modules
 os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
-
-from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, L2Regularization
+from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
-# --- Memory Optimization Setup ---
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-torch.backends.cudnn.benchmark = True
-
 # --- Hyperparameters ---
-LEARNING_RATE = 0.1  # Higher initial LR for larger batch size
-NUM_EPOCHS = 90
-BATCH_SIZE = 64  # Increased batch size
+LEARNING_RATE = 0.01
+NUM_EPOCHS = 50
+BATCH_SIZE = 64
 NUM_CLASSES = 2
-GRADIENT_ACCUMULATION_STEPS = 2  # Reduced accumulation steps for larger batch size
-VALIDATION_SPLIT = 0.2
-L2_LAMBDA = 1e-4  # L2 regularization strength
-
-# --- Learning Rate Schedule ---
-def get_learning_rate(epoch):
-    """Simple step-based learning rate schedule"""
-    if epoch < 30:
-        return LEARNING_RATE
-    elif epoch < 60:
-        return LEARNING_RATE * 0.1
-    else:
-        return LEARNING_RATE * 0.01
+VALIDATION_SPLIT = 0.2  # 20% of data for validation
+CHECKPOINT_DIR = '../models/checkpoints'
+BEST_MODEL_PATH = '../models/best_model.pth'
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Create directories for saving
-os.makedirs('../models', exist_ok=True)
-os.makedirs('../models/training_checkpoints', exist_ok=True)
+# Create checkpoint directory
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-def clear_memory():
-    torch.cuda.empty_cache()
-    gc.collect()
-
-clear_memory()
-
-# --- Automatic Model Loading ---
-def find_latest_checkpoint():
-    """Find the latest checkpoint file"""
-    checkpoints = [f for f in os.listdir('../models/training_checkpoints') if f.endswith('.pth')]
-    if not checkpoints:
-        return None
-    
-    # Sort by modification time (newest first)
-    checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join('../models/training_checkpoints', x)), reverse=True)
-    return os.path.join('../models/training_checkpoints', checkpoints[0])
-
-def load_checkpoint(model, optimizer=None):
-    """Load model from checkpoint"""
-    checkpoint_path = find_latest_checkpoint()
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        print(f"📂 Loading checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        
-        model.load_state_dict(checkpoint['model_state_dict'])
-        start_epoch = checkpoint['epoch']
-        best_val_loss = checkpoint['best_val_loss']
-        training_history = checkpoint['training_history']
-        
-        if optimizer and 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        print(f"🔄 Resuming from epoch {start_epoch}")
-        return start_epoch, best_val_loss, training_history
-    
-    print("🚀 No checkpoint found, starting fresh training")
-    return 0, float('inf'), []
-
-# --- Automatic Model Saving ---
-def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
-    """Save model checkpoint"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    checkpoint = {
-        'epoch': epoch + 1,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'best_val_loss': best_val_loss,
-        'training_history': training_history,
-        'timestamp': timestamp,
-        'hyperparameters': {
-            'learning_rate': LEARNING_RATE,
-            'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS,
-            'l2_lambda': L2_LAMBDA
-        }
-    }
-    
-    # Save regular checkpoint
-    checkpoint_path = f'../models/training_checkpoints/checkpoint_epoch_{epoch+1}_{timestamp}.pth'
-    torch.save(checkpoint, checkpoint_path)
-    
-    # Save as best model if it's the best so far
-    if is_best:
-        best_model_path = f'../models/best_model_{timestamp}.pth'
-        torch.save(checkpoint, best_model_path)
-        print(f"💾 Saved best model: {best_model_path}")
-    
-    # Also save training history as JSON for easy analysis
-    history_path = f'../models/training_checkpoints/training_history.json'
-    with open(history_path, 'w') as f:
-        json.dump(training_history, f, indent=2)
-    
-    return checkpoint_path
-
-def save_final_model(model, training_history, final_val_loss, final_val_acc):
-    """Save final model after training completes"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    final_checkpoint = {
-        'model_state_dict': model.state_dict(),
-        'final_val_loss': final_val_loss,
-        'final_val_acc': final_val_acc,
-        'training_history': training_history,
-        'timestamp': timestamp,
-        'hyperparameters': {
-            'learning_rate': LEARNING_RATE,
-            'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS,
-            'l2_lambda': L2_LAMBDA
-        }
-    }
-    
-    final_path = f'../models/final_model_{timestamp}.pth'
-    torch.save(final_checkpoint, final_path)
-    print(f"🎯 Saved final model: {final_path}")
-    return final_path
-
-# --- Instantiate Model ---
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
-
-# Use model's own optimizer and loss function
+# Instantiate model
+model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE).to(device)
+criterion = model.loss 
 optimizer = model.configure_optimizers()
-criterion = model.loss
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, verbose=True)
 
-print(f"✅ Using model's built-in optimizer and loss function")
-
-# Load checkpoint if exists
-start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
-
-# Mixed precision
-scaler = torch.cuda.amp.GradScaler()
-
-# --- Dataset and DataLoaders ---
-# Define separate transforms for training and validation
-train_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(degrees=15),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    transforms.RandomGrayscale(p=0.1),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-val_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-# Create two separate datasets with the correct transforms
-train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
-val_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=val_transform)
-
-# Determine the split sizes
-dataset_size = len(train_dataset)
+# Load dataset and split into train/validation
+dataset = CatAndDogDataset(img_dir='../data/processed')
+dataset_size = len(dataset)
 val_size = int(VALIDATION_SPLIT * dataset_size)
 train_size = dataset_size - val_size
+train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-# Create a list of indices for splitting
-indices = torch.randperm(dataset_size).tolist()
-train_indices = indices[:train_size]
-val_indices = indices[train_size:]
+train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
-# Create subsets from the new indices
-train_subset = torch.utils.data.Subset(train_dataset, train_indices)
-val_subset = torch.utils.data.Subset(val_dataset, val_indices)
+print(f"Training samples: {train_size}, Validation samples: {val_size}")
 
-print(f"📊 Training: {len(train_subset)} samples")
-print(f"📊 Validation: {len(val_subset)} samples")
+# Initialize TensorBoard writer
+writer = SummaryWriter(f'./runs/dog_cat_classifier_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
 
-train_loader = DataLoader(train_subset, 
-                         batch_size=BATCH_SIZE,
-                         shuffle=True,
-                         pin_memory=True,
-                         num_workers=4)
+# Track best validation accuracy
+best_val_accuracy = 0.0
+train_losses = []
+val_losses = []
+val_accuracies = []
 
-val_loader = DataLoader(val_subset,
-                       batch_size=BATCH_SIZE * 2,
-                       shuffle=False,
-                       pin_memory=True,
-                       num_workers=2)
+# Function to calculate accuracy
+def calculate_accuracy(outputs, labels):
+    _, preds = torch.max(outputs, 1)
+    return torch.sum(preds == labels).item() / labels.size(0)
 
-print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
-for epoch in range(start_epoch, NUM_EPOCHS):
-    # Update learning rate based on schedule
-    current_lr = get_learning_rate(epoch)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = current_lr
-    
+# Training loop
+for epoch in range(NUM_EPOCHS):
+    # Training phase
     model.train()
-    train_loss = 0
-    correct = 0
-    total = 0
+    running_loss = 0.0
+    running_accuracy = 0.0
     
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [LR: {current_lr:.4f}]")
-    
-    optimizer.zero_grad()
+    progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [Train]", unit="batch", colour="green")
     
     for batch_idx, (images, labels) in enumerate(progress_bar):
         images, labels = images.to(device), labels.to(device)
         
-        with torch.cuda.amp.autocast():
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            
-            # Add L2 regularization manually
-            l2_reg = torch.tensor(0., device=device)
-            for param in model.parameters():
-                l2_reg += L2Regularization(param, L2_LAMBDA)
-            
-            loss = loss + l2_reg
-            loss = loss / GRADIENT_ACCUMULATION_STEPS
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
         
-        scaler.scale(loss).backward()
+        # Calculate metrics
+        accuracy = calculate_accuracy(outputs, labels)
+        running_loss += loss.item()
+        running_accuracy += accuracy
         
-        if (batch_idx + 1) % GRADIENT_ACCUMULATION_STEPS == 0 or (batch_idx + 1) == len(train_loader):
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-            
-            if batch_idx % 20 == 0:
-                clear_memory()
-        
-        # Note: We need to subtract the L2 penalty for accurate loss reporting
-        pure_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS - (L2_LAMBDA / 2) * l2_reg.item() / GRADIENT_ACCUMULATION_STEPS
-        train_loss += pure_loss * images.size(0)
-        
-        _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
-        
+        # Update progress bar
         progress_bar.set_postfix({
-            'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
-            'acc': f'{100.*correct/total:.2f}%',
-            'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-            'L2': f'{(L2_LAMBDA / 2) * l2_reg.item():.6f}'  # Show L2 penalty
+            'loss': f'{loss.item():.4f}',
+            'acc': f'{accuracy:.4f}'
         })
     
-    # Validation (NO L2 regularization during validation)
+    # Calculate average training metrics for the epoch
+    avg_train_loss = running_loss / len(train_dataloader)
+    avg_train_accuracy = running_accuracy / len(train_dataloader)
+    train_losses.append(avg_train_loss)
+    
+    # Validation phase
     model.eval()
-    val_loss = 0
-    val_correct = 0
-    val_total = 0
+    val_running_loss = 0.0
+    val_running_accuracy = 0.0
     
     with torch.no_grad():
-        for images, labels in val_loader:
+        val_progress_bar = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [Val]", unit="batch", colour="blue")
+        
+        for images, labels in val_progress_bar:
             images, labels = images.to(device), labels.to(device)
             
-            with torch.cuda.amp.autocast():
-                outputs = model(images)
-                loss = criterion(outputs, labels)  # No L2 for validation
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            accuracy = calculate_accuracy(outputs, labels)
             
-            val_loss += loss.item() * images.size(0)
-            _, predicted = outputs.max(1)
-            val_total += labels.size(0)
-            val_correct += predicted.eq(labels).sum().item()
+            val_running_loss += loss.item()
+            val_running_accuracy += accuracy
+            
+            val_progress_bar.set_postfix({
+                'val_loss': f'{loss.item():.4f}',
+                'val_acc': f'{accuracy:.4f}'
+            })
     
-    avg_train_loss = train_loss / len(train_subset)
-    train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_subset)
-    val_acc = 100. * val_correct / val_total
+    # Calculate average validation metrics for the epoch
+    avg_val_loss = val_running_loss / len(val_dataloader)
+    avg_val_accuracy = val_running_accuracy / len(val_dataloader)
+    val_losses.append(avg_val_loss)
+    val_accuracies.append(avg_val_accuracy)
     
-    # Save epoch stats
-    epoch_stats = {
-        'epoch': epoch + 1,
+    # Update learning rate scheduler
+    scheduler.step(avg_val_loss)
+    
+    # Log metrics to TensorBoard
+    writer.add_scalar('Loss/train', avg_train_loss, epoch)
+    writer.add_scalar('Loss/val', avg_val_loss, epoch)
+    writer.add_scalar('Accuracy/train', avg_train_accuracy, epoch)
+    writer.add_scalar('Accuracy/val', avg_val_accuracy, epoch)
+    writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], epoch)
+    
+    # Save checkpoint
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'train_loss': avg_train_loss,
-        'train_acc': train_acc,
         'val_loss': avg_val_loss,
-        'val_acc': val_acc,
-        'learning_rate': current_lr,
-        'timestamp': datetime.now().isoformat(),
-        'l2_lambda': L2_LAMBDA
+        'val_accuracy': avg_val_accuracy
     }
-    training_history.append(epoch_stats)
     
-    print(f"\n📊 Epoch {epoch+1}:")
-    print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-    print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-    print(f"   Learning Rate: {current_lr:.6f}")
-    print(f"   L2 Regularization: λ = {L2_LAMBDA}")
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, f'checkpoint_epoch_{epoch+1}.pth')
+    torch.save(checkpoint, checkpoint_path)
     
-    # Check if this is the best model
-    is_best = avg_val_loss < best_val_loss
-    if is_best:
-        best_val_loss = avg_val_loss
-        best_val_acc = val_acc
-        print("   🎯 New best model!")
+    # Save best model
+    if avg_val_accuracy > best_val_accuracy:
+        best_val_accuracy = avg_val_accuracy
+        torch.save(model.state_dict(), BEST_MODEL_PATH)
+        print(f"✨ New best model saved with validation accuracy: {best_val_accuracy:.4f}")
     
-    # Save checkpoint (every epoch)
-    checkpoint_path = save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best)
-    print(f"   💾 Checkpoint saved: {checkpoint_path}")
-    
-    clear_memory()
-    torch.cuda.reset_peak_memory_stats()
-
-# --- After Training Completion ---
-print(f"\n🎯 Training completed!")
-print(f"   Best Validation Loss: {best_val_loss:.4f}")
-print(f"   Best Validation Accuracy: {best_val_acc:.2f}%")
-print(f"   Total Epochs Trained: {len(training_history)}")
-
-# Save final model
-final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
+    print(f"\nEpoch {epoch+1}/{NUM_EPOCHS} Summary:")
+    print(f"Train Loss: {avg_train_loss:.4f}, Train Accuracy: {avg_train_accuracy:.4f}")
+    print(f"Val Loss: {avg_val_loss:.4f}, Val Accuracy: {avg_val_accuracy:.4f}")
+    print(f"Best Val Accuracy: {best_val_accuracy:.4f}\n")
 
 print("🌟 Training finished! 🌟")
-print(f"📁 Models saved in: models/")
-print(f"📁 Checkpoints saved in: models/training_checkpoints")
+writer.close()
+
+# Plot training history
+plt.figure(figsize=(12, 5))
+
+# Plot loss
+plt.subplot(1, 2, 1)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.title('Training and Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+
+# Plot accuracy
+plt.subplot(1, 2, 2)
+plt.plot(val_accuracies, label='Validation Accuracy', color='orange')
+plt.title('Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.savefig('./training_history.png')
+plt.show()
+
+print(f"Best validation accuracy: {best_val_accuracy:.4f}")
+print(f"Training history plot saved as './training_history.png'")
+print(f"Best model saved as '{BEST_MODEL_PATH}'")
+print(f"Checkpoints saved in '{CHECKPOINT_DIR}/'")
+print(f"TensorBoard logs available with: tensorboard --logdir=./runs")
