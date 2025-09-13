@@ -343,8 +343,7 @@ class ResNet50(d2l.Classifier):
         )
         self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
         self.dropout2 = Dropout(p=self.dropout_rate)
-        self.fc = LinearRegression(in_features=2048, out_features=num_classes, lr=self.lr, bias=self.bias)
-        self.dropout3 = Dropout(p=self.dropout_rate * 0.5)
+        self.softmax = SoftmaxRegression(2048, num_classes, lr=self.lr, bias=self.bias)
     
     def forward(self, X):
         Y = self.pool1(self.conv1(X))
@@ -359,10 +358,8 @@ class ResNet50(d2l.Classifier):
         Y = Y.reshape(Y.shape[0], -1)
         
         Y = self.dropout2(Y)
+        Y = self.softmax(Y)
         
-        Y = self.fc(Y)
-        Y = self.dropout3(Y)
-    
         return Y
         
         
