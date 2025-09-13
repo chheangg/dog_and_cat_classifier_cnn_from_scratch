@@ -5,7 +5,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 
@@ -47,15 +47,12 @@ def initialize_weights(model):
         if hasattr(module, 'w') and hasattr(module.w, 'data'):
             if isinstance(module, (Conv2D, LinearRegression)):
                 nn.init.kaiming_normal_(module.w.data, mode='fan_out', nonlinearity='relu')
-                print(f"   ✅ Initialized {name}.w with Kaiming")
                 if hasattr(module, 'b') and module.b is not None:
                     nn.init.constant_(module.b.data, 0)
-                    print(f"   ✅ Initialized {name}.b with zeros")
         elif hasattr(module, 'gamma') and hasattr(module.gamma, 'data'):
             if isinstance(module, BatchNorm2d):
                 nn.init.constant_(module.gamma.data, 1)
                 nn.init.constant_(module.beta.data, 0)
-                print(f"   ✅ Initialized {name}.gamma/beta with ones/zeros")
 
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
@@ -65,29 +62,6 @@ initialize_weights(model)
 optimizer = model.configure_optimizers()
 criterion = model.loss
 print(f"✅ Using model's built-in optimizer and loss function")
-
-# --- Gradient Clipping ---
-def clip_gradients(model, max_norm=1.0):
-    total_norm = 0
-    for p in model.parameters():
-        if p.grad is not None:
-            total_norm += p.grad.data.norm(2).item() ** 2
-    total_norm = total_norm ** 0.5
-    clip_coef = max_norm / (total_norm + 1e-6)
-    if clip_coef < 1:
-        for p in model.parameters():
-            if p.grad is not None:
-                p.grad.data.mul_(clip_coef)
-    return total_norm
-
-# --- Learning Rate Warmup ---
-def warmup_learning_rate(optimizer, epoch, warmup_epochs=5, base_lr=0.01):
-    if epoch < warmup_epochs:
-        lr = base_lr * (epoch + 1) / warmup_epochs
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        return lr
-    return base_lr
 
 # --- Checkpoint Utilities ---
 def find_latest_checkpoint():
@@ -100,7 +74,6 @@ def find_latest_checkpoint():
 def load_checkpoint(model, optimizer=None):
     checkpoint_path = find_latest_checkpoint()
     if checkpoint_path and os.path.exists(checkpoint_path):
-        print(f"📂 Loading checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         start_epoch = checkpoint['epoch']
@@ -108,9 +81,7 @@ def load_checkpoint(model, optimizer=None):
         training_history = checkpoint['training_history']
         if optimizer and 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print(f"🔄 Resuming from epoch {start_epoch}")
         return start_epoch, best_val_loss, training_history
-    print("🚀 No checkpoint found, starting fresh training")
     return 0, float('inf'), []
 
 def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
@@ -133,7 +104,6 @@ def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is
     if is_best:
         best_model_path = f'../models/best_model_{timestamp}.pth'
         torch.save(checkpoint, best_model_path)
-        print(f"💾 Saved best model: {best_model_path}")
     history_path = f'../models/training_checkpoints/training_history.json'
     with open(history_path, 'w') as f:
         json.dump(training_history, f, indent=2)
@@ -155,7 +125,6 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
     }
     final_path = f'../models/final_model_{timestamp}.pth'
     torch.save(final_checkpoint, final_path)
-    print(f"🎯 Saved final model: {final_path}")
     return final_path
 
 # --- Load checkpoint if exists ---
@@ -199,7 +168,6 @@ print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 
 # --- Training Loop ---
 for epoch in range(start_epoch, NUM_EPOCHS):
-    current_lr = warmup_learning_rate(optimizer, epoch)
     model.train()
     train_loss, correct, total = 0, 0, 0
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
@@ -207,13 +175,10 @@ for epoch in range(start_epoch, NUM_EPOCHS):
 
     for batch_idx, (images, labels) in enumerate(progress_bar):
         images, labels = images.to(device), labels.to(device)
-        grad_norm = 0.0  # default
 
         with torch.cuda.amp.autocast(device_type='cuda'):
             outputs = model(images)
             loss = criterion(outputs, labels)
-
-            # L2 regularization
             l2_lambda = 1e-4
             l2_reg = sum(L2Regularization(p, l2_lambda) for p in model.parameters())
             loss = (loss + l2_reg) / GRADIENT_ACCUMULATION_STEPS
@@ -221,14 +186,12 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         scaler.scale(loss).backward()
 
         if (batch_idx + 1) % GRADIENT_ACCUMULATION_STEPS == 0 or (batch_idx + 1) == len(train_loader):
-            grad_norm = clip_gradients(model, max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
             if batch_idx % 20 == 0:
                 clear_memory()
 
-        # Compute pure loss for reporting
         pure_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS - (l2_lambda/2) * l2_reg.item()/GRADIENT_ACCUMULATION_STEPS
         train_loss += pure_loss * images.size(0)
         _, predicted = outputs.max(1)
@@ -240,8 +203,6 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
             'L2': f'{(l2_lambda/2)*l2_reg.item():.6f}',
-            'lr': f'{current_lr:.6f}',
-            'grad_norm': f'{grad_norm:.4f}'
         })
 
     # --- Validation ---
@@ -271,15 +232,14 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         'val_acc': val_acc,
         'timestamp': datetime.now().isoformat(),
         'l2_lambda': l2_lambda,
-        'learning_rate': current_lr
+        'learning_rate': LEARNING_RATE
     }
     training_history.append(epoch_stats)
 
     print(f"\n📊 Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"             Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-    print(f"             L2 λ={l2_lambda}, LR={current_lr:.6f}")
+    print(f"             L2 λ={l2_lambda}, LR={LEARNING_RATE}")
 
-    # Check best model
     is_best = avg_val_loss < best_val_loss
     if is_best:
         best_val_loss = avg_val_loss
@@ -295,5 +255,4 @@ for epoch in range(start_epoch, NUM_EPOCHS):
 # --- Save final model ---
 final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
 print("🌟 Training finished! 🌟")
-print(f"📁 Models saved in: models/")
-print(f"📁 Checkpoints saved in: models/training_checkpoints")
+print(f"📁 Models")
