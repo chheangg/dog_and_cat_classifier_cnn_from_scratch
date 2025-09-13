@@ -67,7 +67,6 @@ class SoftmaxRegression(d2l.Classifier):
         self.net = LinearRegression(in_features, out_features, lr, bias)
         
     def forward(self, X):
-        print(X, self.net.w)
         X = X.reshape((-1, self.net.w.shape[0]))
         logits = self.net(X)  # Use the internal network
         return softmax(logits)
@@ -357,7 +356,8 @@ class ResNet50(d2l.Classifier):
         Y = self.conv3(Y)
         Y = self.conv4(Y)
         Y = self.conv5(Y)
-
+        
+        Y = self.pool2(Y)
         Y = Y.reshape(Y.shape[0], -1)
         
         Y = self.dropout2(Y)
