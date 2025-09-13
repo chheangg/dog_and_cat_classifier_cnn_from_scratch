@@ -13,7 +13,7 @@ from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, L2Regulariza
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.1
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2

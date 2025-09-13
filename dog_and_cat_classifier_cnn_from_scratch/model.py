@@ -69,7 +69,6 @@ class SoftmaxRegression(d2l.Classifier):
     def forward(self, X):
         X = X.reshape((-1, self.net.w.shape[0]))
         logits = self.net(X)  # Use the internal network
-        print(logits)
         return softmax(logits)
 
 # models from 2.0-cnn-layer.ipynb
