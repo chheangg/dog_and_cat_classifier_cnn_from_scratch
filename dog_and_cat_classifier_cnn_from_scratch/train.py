@@ -211,7 +211,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     with torch.no_grad():
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
-            with torch.cuda.amp.autocast(device_type='cuda'):
+            with torch.cuda.amp.autocast():
                 outputs = model(images)
                 loss = criterion(outputs, labels)
             val_loss += loss.item() * images.size(0)
