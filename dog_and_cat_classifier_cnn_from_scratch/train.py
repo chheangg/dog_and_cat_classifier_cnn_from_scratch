@@ -1,258 +1,295 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
+import gc
 import os
-import numpy as np
-from datetime import datetime
-import matplotlib.pyplot as plt
 import json
+from datetime import datetime
+from torchvision import transforms
 
-# Import your custom modules
-import sys
-sys.path.append(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
-from model import ResNet50
-from data import CatAndDogDataset
+os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
+
+from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, L2Regularization
+from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
 LEARNING_RATE = 0.01
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2
-VALIDATION_SPLIT = 0.2  # 20% of data for validation
-CHECKPOINT_DIR = './checkpoints'
-BEST_MODEL_PATH = './best_model.pth'
-RESULTS_FILE = './training_results.json'
+VALIDATION_SPLIT = 0.2
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Create checkpoint directory
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+# Create directories for saving
+os.makedirs('../models', exist_ok=True)
+os.makedirs('../models/training_checkpoints', exist_ok=True)
 
-# Instantiate model
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE).to(device)
-criterion = model.loss 
+def clear_memory():
+    torch.cuda.empty_cache()
+    gc.collect()
+
+clear_memory()
+
+# --- Automatic Model Loading ---
+def find_latest_checkpoint():
+    """Find the latest checkpoint file"""
+    checkpoints = [f for f in os.listdir('../models/training_checkpoints') if f.endswith('.pth')]
+    if not checkpoints:
+        return None
+    
+    # Sort by modification time (newest first)
+    checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join('../models/training_checkpoints', x)), reverse=True)
+    return os.path.join('../models/training_checkpoints', checkpoints[0])
+
+def load_checkpoint(model, optimizer=None):
+    """Load model from checkpoint"""
+    checkpoint_path = find_latest_checkpoint()
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"📂 Loading checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        model.load_state_dict(checkpoint['model_state_dict'])
+        start_epoch = checkpoint['epoch']
+        best_val_loss = checkpoint['best_val_loss']
+        training_history = checkpoint['training_history']
+        
+        if optimizer and 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        print(f"🔄 Resuming from epoch {start_epoch}")
+        return start_epoch, best_val_loss, training_history
+    
+    print("🚀 No checkpoint found, starting fresh training")
+    return 0, float('inf'), []
+
+# --- Automatic Model Saving ---
+def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
+    """Save model checkpoint"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    checkpoint = {
+        'epoch': epoch + 1,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'best_val_loss': best_val_loss,
+        'training_history': training_history,
+        'timestamp': timestamp,
+        'hyperparameters': {
+            'learning_rate': LEARNING_RATE,
+            'batch_size': BATCH_SIZE,
+            'num_epochs': NUM_EPOCHS
+        }
+    }
+    
+    # Save regular checkpoint
+    checkpoint_path = f'../models/training_checkpoints/checkpoint_epoch_{epoch+1}_{timestamp}.pth'
+    torch.save(checkpoint, checkpoint_path)
+    
+    # Save as best model if it's the best so far
+    if is_best:
+        best_model_path = f'../models/best_model_{timestamp}.pth'
+        torch.save(checkpoint, best_model_path)
+        print(f"💾 Saved best model: {best_model_path}")
+    
+    # Also save training history as JSON for easy analysis
+    history_path = f'../models/training_checkpoints/training_history.json'
+    with open(history_path, 'w') as f:
+        json.dump(training_history, f, indent=2)
+    
+    return checkpoint_path
+
+def save_final_model(model, training_history, final_val_loss, final_val_acc):
+    """Save final model after training completes"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    final_checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'final_val_loss': final_val_loss,
+        'final_val_acc': final_val_acc,
+        'training_history': training_history,
+        'timestamp': timestamp,
+        'hyperparameters': {
+            'learning_rate': LEARNING_RATE,
+            'batch_size': BATCH_SIZE,
+            'num_epochs': NUM_EPOCHS
+        }
+    }
+    
+    final_path = f'../models/final_model_{timestamp}.pth'
+    torch.save(final_checkpoint, final_path)
+    print(f"🎯 Saved final model: {final_path}")
+    return final_path
+
+# --- Instantiate Model ---
+model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
+
+# Use model's own optimizer and loss function
 optimizer = model.configure_optimizers()
-# Remove verbose parameter for compatibility
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
+criterion = model.loss
 
-# Load dataset and split into train/validation
-dataset = CatAndDogDataset(img_dir='../data/processed')
-dataset_size = len(dataset)
+print(f"✅ Using model's built-in optimizer and loss function")
+
+# Load checkpoint if exists
+start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
+
+# --- Dataset and DataLoaders ---
+# Define separate transforms for training and validation
+train_transform = transforms.Compose([
+    transforms.Lambda(lambda x: x / 255.0),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomRotation(degrees=15),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+    transforms.RandomGrayscale(p=0.1),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+val_transform = transforms.Compose([
+    transforms.Lambda(lambda x: x / 255.0),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+# Create two separate datasets with the correct transforms
+train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
+val_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=val_transform)
+
+# Determine the split sizes
+dataset_size = len(train_dataset)
 val_size = int(VALIDATION_SPLIT * dataset_size)
 train_size = dataset_size - val_size
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+# Create a list of indices for splitting
+indices = torch.randperm(dataset_size).tolist()
+train_indices = indices[:train_size]
+val_indices = indices[train_size:]
 
-print(f"Training samples: {train_size}, Validation samples: {val_size}")
+# Create subsets from the new indices
+train_subset = torch.utils.data.Subset(train_dataset, train_indices)
+val_subset = torch.utils.data.Subset(val_dataset, val_indices)
 
-# Track best validation accuracy
-best_val_accuracy = 0.0
-train_losses = []
-val_losses = []
-val_accuracies = []
-train_accuracies = []
-learning_rates = []
+print(f"📊 Training: {len(train_subset)} samples")
+print(f"📊 Validation: {len(val_subset)} samples")
 
-# Function to calculate accuracy
-def calculate_accuracy(outputs, labels):
-    _, preds = torch.max(outputs, 1)
-    return torch.sum(preds == labels).item() / labels.size(0)
+train_loader = DataLoader(train_subset, 
+                         batch_size=BATCH_SIZE,
+                         shuffle=True,
+                         pin_memory=True,
+                         num_workers=4)
 
-# Training loop
-for epoch in range(NUM_EPOCHS):
-    # Training phase
+val_loader = DataLoader(val_subset,
+                       batch_size=BATCH_SIZE * 2,
+                       shuffle=False,
+                       pin_memory=True,
+                       num_workers=2)
+
+print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
+for epoch in range(start_epoch, NUM_EPOCHS):
     model.train()
-    running_loss = 0.0
-    running_accuracy = 0.0
+    train_loss = 0
+    correct = 0
+    total = 0
     
-    progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [Train]", unit="batch", colour="green")
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
     
     for batch_idx, (images, labels) in enumerate(progress_bar):
         images, labels = images.to(device), labels.to(device)
         
         optimizer.zero_grad()
+        
         outputs = model(images)
         loss = criterion(outputs, labels)
+        
+        # Add L2 regularization manually
+        l2_lambda = 1e-4  # L2 regularization strength
+        l2_reg = torch.tensor(0., device=device)
+        for param in model.parameters():
+            l2_reg += L2Regularization(param, l2_lambda)
+        
+        loss = loss + l2_reg
+        
         loss.backward()
         optimizer.step()
         
-        # Calculate metrics
-        accuracy = calculate_accuracy(outputs, labels)
-        running_loss += loss.item()
-        running_accuracy += accuracy
+        # Note: We need to subtract the L2 penalty for accurate loss reporting
+        pure_loss = loss.item() - (l2_lambda / 2) * l2_reg.item()
+        train_loss += pure_loss * images.size(0)
         
-        # Update progress bar
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+        
         progress_bar.set_postfix({
-            'loss': f'{loss.item():.4f}',
-            'acc': f'{accuracy:.4f}'
+            'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
+            'acc': f'{100.*correct/total:.2f}%',
+            'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
+            'L2': f'{(l2_lambda / 2) * l2_reg.item():.6f}'  # Show L2 penalty
         })
     
-    # Calculate average training metrics for the epoch
-    avg_train_loss = running_loss / len(train_dataloader)
-    avg_train_accuracy = running_accuracy / len(train_dataloader)
-    train_losses.append(avg_train_loss)
-    train_accuracies.append(avg_train_accuracy)
-    
-    # Validation phase
+    # Validation (NO L2 regularization during validation)
     model.eval()
-    val_running_loss = 0.0
-    val_running_accuracy = 0.0
+    val_loss = 0
+    val_correct = 0
+    val_total = 0
     
     with torch.no_grad():
-        val_progress_bar = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [Val]", unit="batch", colour="blue")
-        
-        for images, labels in val_progress_bar:
+        for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
             
             outputs = model(images)
-            loss = criterion(outputs, labels)
-            accuracy = calculate_accuracy(outputs, labels)
+            loss = criterion(outputs, labels)  # No L2 for validation
             
-            val_running_loss += loss.item()
-            val_running_accuracy += accuracy
-            
-            val_progress_bar.set_postfix({
-                'val_loss': f'{loss.item():.4f}',
-                'val_acc': f'{accuracy:.4f}'
-            })
+            val_loss += loss.item() * images.size(0)
+            _, predicted = outputs.max(1)
+            val_total += labels.size(0)
+            val_correct += predicted.eq(labels).sum().item()
     
-    # Calculate average validation metrics for the epoch
-    avg_val_loss = val_running_loss / len(val_dataloader)
-    avg_val_accuracy = val_running_accuracy / len(val_dataloader)
-    val_losses.append(avg_val_loss)
-    val_accuracies.append(avg_val_accuracy)
+    avg_train_loss = train_loss / len(train_dataset)
+    train_acc = 100. * correct / total
+    avg_val_loss = val_loss / len(val_dataset)
+    val_acc = 100. * val_correct / val_total
     
-    # Record current learning rate
-    learning_rates.append(optimizer.param_groups[0]['lr'])
-    
-    # Update learning rate scheduler
-    scheduler.step(avg_val_loss)
-    
-    # Save checkpoint
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
+    # Save epoch stats
+    epoch_stats = {
+        'epoch': epoch + 1,
         'train_loss': avg_train_loss,
-        'train_accuracy': avg_train_accuracy,
+        'train_acc': train_acc,
         'val_loss': avg_val_loss,
-        'val_accuracy': avg_val_accuracy,
-        'learning_rate': optimizer.param_groups[0]['lr']
+        'val_acc': val_acc,
+        'timestamp': datetime.now().isoformat(),
+        'l2_lambda': l2_lambda  # Track L2 strength
     }
+    training_history.append(epoch_stats)
     
-    checkpoint_path = os.path.join(CHECKPOINT_DIR, f'checkpoint_epoch_{epoch+1}.pth')
-    torch.save(checkpoint, checkpoint_path)
+    print(f"\n📊 Epoch {epoch+1}:")
+    print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+    print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+    print(f"   L2 Regularization: λ = {l2_lambda}")
     
-    # Save best model
-    if avg_val_accuracy > best_val_accuracy:
-        best_val_accuracy = avg_val_accuracy
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'val_accuracy': avg_val_accuracy
-        }, BEST_MODEL_PATH)
-        print(f"✨ New best model saved with validation accuracy: {best_val_accuracy:.4f}")
+    # Check if this is the best model
+    is_best = avg_val_loss < best_val_loss
+    if is_best:
+        best_val_loss = avg_val_loss
+        best_val_acc = val_acc
+        print("   🎯 New best model!")
     
-    print(f"\nEpoch {epoch+1}/{NUM_EPOCHS} Summary:")
-    print(f"Train Loss: {avg_train_loss:.4f}, Train Accuracy: {avg_train_accuracy:.4f}")
-    print(f"Val Loss: {avg_val_loss:.4f}, Val Accuracy: {avg_val_accuracy:.4f}")
-    print(f"Best Val Accuracy: {best_val_accuracy:.4f}")
-    print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}\n")
+    # Save checkpoint (every epoch)
+    checkpoint_path = save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best)
+    print(f"   💾 Checkpoint saved: {checkpoint_path}")
+    
+    clear_memory()
+
+# --- After Training Completion ---
+print(f"\n🎯 Training completed!")
+print(f"   Best Validation Loss: {best_val_loss:.4f}")
+print(f"   Best Validation Accuracy: {best_val_acc:.2f}%")
+print(f"   Total Epochs Trained: {len(training_history)}")
+
+# Save final model
+final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
 
 print("🌟 Training finished! 🌟")
-
-# Save training results
-training_results = {
-    'train_losses': train_losses,
-    'train_accuracies': train_accuracies,
-    'val_losses': val_losses,
-    'val_accuracies': val_accuracies,
-    'learning_rates': learning_rates,
-    'best_val_accuracy': best_val_accuracy,
-    'final_epoch': NUM_EPOCHS
-}
-
-with open(RESULTS_FILE, 'w') as f:
-    json.dump(training_results, f, indent=4)
-
-# Plot training history
-plt.figure(figsize=(15, 10))
-
-# Plot loss
-plt.subplot(2, 2, 1)
-plt.plot(train_losses, label='Train Loss', color='blue')
-plt.plot(val_losses, label='Validation Loss', color='red')
-plt.title('Training and Validation Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.grid(True)
-
-# Plot accuracy
-plt.subplot(2, 2, 2)
-plt.plot(train_accuracies, label='Train Accuracy', color='blue')
-plt.plot(val_accuracies, label='Validation Accuracy', color='red')
-plt.title('Training and Validation Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
-plt.grid(True)
-
-# Plot learning rate
-plt.subplot(2, 2, 3)
-plt.plot(learning_rates, label='Learning Rate', color='green')
-plt.title('Learning Rate Schedule')
-plt.xlabel('Epoch')
-plt.ylabel('Learning Rate')
-plt.legend()
-plt.grid(True)
-
-# Plot best validation accuracy
-plt.subplot(2, 2, 4)
-plt.bar(['Best Validation Accuracy'], [best_val_accuracy], color='orange')
-plt.title(f'Best Validation Accuracy: {best_val_accuracy:.4f}')
-plt.ylabel('Accuracy')
-plt.ylim(0, 1.0)
-
-plt.tight_layout()
-plt.savefig('./training_history.png', dpi=300, bbox_inches='tight')
-plt.show()
-
-print(f"Best validation accuracy: {best_val_accuracy:.4f}")
-print(f"Training history plot saved as './training_history.png'")
-print(f"Best model saved as '{BEST_MODEL_PATH}'")
-print(f"Checkpoints saved in '{CHECKPOINT_DIR}/'")
-print(f"Training results saved as '{RESULTS_FILE}'")
-
-# Function to load and test the best model
-def test_best_model():
-    print("\nTesting the best model...")
-    # Load the best model
-    checkpoint = torch.load(BEST_MODEL_PATH)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    
-    model.eval()
-    correct = 0
-    total = 0
-    
-    with torch.no_grad():
-        for images, labels in tqdm(val_dataloader, desc="Testing best model"):
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    
-    accuracy = 100 * correct / total
-    print(f"Best model accuracy on validation set: {accuracy:.2f}%")
-    
-    return accuracy
-
-# Test the best model
-test_best_model()
+print(f"📁 Models saved in: models/")
+print(f"📁 Checkpoints saved in: models/training_checkpoints")
