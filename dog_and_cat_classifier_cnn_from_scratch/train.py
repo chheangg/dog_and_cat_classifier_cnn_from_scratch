@@ -89,10 +89,11 @@ def load_checkpoint(model, optimizer=None):
     return 0, float('inf'), []
 
 # --- Automatic Model Saving ---
+# --- Automatic Model Saving ---
 def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
     """Save model checkpoint"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     checkpoint = {
         'epoch': epoch + 1,
         'model_state_dict': model.state_dict(),
@@ -106,22 +107,24 @@ def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is
             'num_epochs': NUM_EPOCHS
         }
     }
-    
+
     # Save regular checkpoint
     checkpoint_path = f'../models/training_checkpoints/checkpoint_epoch_{epoch+1}_{timestamp}.pth'
     torch.save(checkpoint, checkpoint_path)
-    
+
     # Save as best model if it's the best so far
     if is_best:
         best_model_path = f'../models/best_model_{timestamp}.pth'
         torch.save(checkpoint, best_model_path)
         print(f"💾 Saved best model: {best_model_path}")
-    
+
     # Also save training history as JSON for easy analysis
     history_path = f'../models/training_checkpoints/training_history.json'
+    # Convert any Tensors in training_history to standard Python types before saving
+    serializable_history = [{k: v.item() if isinstance(v, torch.Tensor) else v for k, v in d.items()} for d in training_history]
     with open(history_path, 'w') as f:
-        json.dump(training_history, f, indent=2)
-    
+        json.dump(serializable_history, f, indent=2)
+
     return checkpoint_path
 
 def save_final_model(model, training_history, final_val_loss, final_val_acc):
