@@ -24,7 +24,8 @@ class SGDFromScratch(torch.optim.Optimizer):
         for group in self.param_groups:
             for param in group['params']:
                 if param.grad is not None:
-                    param.data.add_(-self.lr, param.grad.data)
+                    # FIXED: Use correct add_() syntax
+                    param.data.add_(-self.lr * param.grad.data)
         
         return loss
 
@@ -33,7 +34,7 @@ class SGDFromScratch(torch.optim.Optimizer):
             for param in group['params']:
                 if param.grad is not None:
                     param.grad.zero_()
-
+                    
 def softmax(o):
     o_max = o.max(dim=1, keepdim=True).values
     transformed_logits = o - o_max
@@ -68,6 +69,7 @@ class SoftmaxRegression(d2l.Classifier):
     def forward(self, X):
         X = X.reshape((-1, self.net.w.shape[0]))
         logits = self.net(X)  # Use the internal network
+        print(logits)
         return softmax(logits)
 
 # models from 2.0-cnn-layer.ipynb
