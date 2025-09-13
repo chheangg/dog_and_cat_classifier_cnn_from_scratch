@@ -287,9 +287,8 @@ class ResNetLayer(d2l.Module):
         self.bn3 = BatchNorm2d(out_channels * 4, 4)
         
         # Skip connection to match input/output dimensions if needed
-        if use_1x1conv or in_channels != out_channels * 4:
+        if use_1x1conv:
             self.conv4 = Conv2D(in_channels, out_channels * 4, kernel_size=1, stride=strides)
-            self.bn4 = BatchNorm2d(out_channels * 4, 4)
         else:
             self.conv4 = None
         
@@ -302,7 +301,7 @@ class ResNetLayer(d2l.Module):
         
         # add skip connection
         if self.conv4:
-            X = self.bn4(self.conv4(X))
+            X = self.self.conv4(X)
             
         Y += X
         
@@ -314,32 +313,34 @@ class ResNet50(d2l.Classifier):
         self.lr = lr
         self.bias = True
         self.dropout_rate = dropout_rate
-        self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2)
-        self.pool1 = MaxPool2d(kernel_size=3, stride=2)
+        self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2, padding=3)
+        self.bn1 = BatchNorm2d(64)
+        self.relu = ReLU()
+        self.pool1 = MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.dropout1 = Dropout(p=dropout_rate)
         self.conv2 = nn.Sequential(
-            ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True),
-            ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True),
-            ResNetLayer(in_channels=256, out_channels=64, use_1x1conv=True)
+            ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True, strides=1),
+            ResNetLayer(in_channels=256, out_channels=64),
+            ResNetLayer(in_channels=256, out_channels=64)
         )
         self.conv3 = nn.Sequential(
-            ResNetLayer(in_channels=256, out_channels=128, use_1x1conv=True),
-            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True),
-            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True),
-            ResNetLayer(in_channels=512, out_channels=128, use_1x1conv=True)
+            ResNetLayer(in_channels=256, out_channels=128, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=512, out_channels=128),
+            ResNetLayer(in_channels=512, out_channels=128),
+            ResNetLayer(in_channels=512, out_channels=128)
         )
         self.conv4 = nn.Sequential(
-            ResNetLayer(in_channels=512, out_channels=256, use_1x1conv=True),
-            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
-            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
-            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
-            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
-            ResNetLayer(in_channels=1024, out_channels=256, use_1x1conv=True),
+            ResNetLayer(in_channels=512, out_channels=256, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
         )
         self.conv5 = nn.Sequential(
-            ResNetLayer(in_channels=1024, out_channels=512, use_1x1conv=True),
-            ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
-            ResNetLayer(in_channels=2048, out_channels=512, use_1x1conv=True),
+            ResNetLayer(in_channels=1024, out_channels=512, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=2048, out_channels=512),
+            ResNetLayer(in_channels=2048, out_channels=512),
         )
         self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
         self.dropout2 = Dropout(p=self.dropout_rate)
