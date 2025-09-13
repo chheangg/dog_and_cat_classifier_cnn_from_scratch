@@ -14,7 +14,7 @@ from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, Line
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2
@@ -175,8 +175,11 @@ model.apply(kaiming_init)
 # Log initial weight statistics
 log_weight_stats(model)
 
+import torch.optim as optim
+
+
 # Use model's own optimizer and loss function
-optimizer = model.configure_optimizers()
+optimizer = optim.SGD(model.parameters(), lr=model.lr)
 criterion = model.loss
 
 print(f"✅ Using model's built-in optimizer and loss function")

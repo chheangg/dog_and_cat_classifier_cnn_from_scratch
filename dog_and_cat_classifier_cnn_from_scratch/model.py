@@ -69,6 +69,7 @@ class SoftmaxRegression(d2l.Classifier):
     def forward(self, X):
         X = X.reshape((-1, self.net.w.shape[0]))
         logits = self.net(X)  # Use the internal network
+        print(logits)
         return softmax(logits)
 
 # models from 2.0-cnn-layer.ipynb
@@ -361,13 +362,13 @@ class ResNet50(d2l.Classifier):
         Y = Y.reshape(Y.shape[0], -1)
         
         Y = self.dropout2(Y)
-        Y = self.softmax(Y)
+        Y = self.softmax.net(Y)
         
         return Y
         
         
     def loss(self, y_hat, y):
-        return CrossEntropyError(y_hat, y)
+        return torch.nn.functional.cross_entropy(y_hat, y)
     
     def configure_optimizers(self):
         return SGDFromScratch(self.parameters(), self.lr)
