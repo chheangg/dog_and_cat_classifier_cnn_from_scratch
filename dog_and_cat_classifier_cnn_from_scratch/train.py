@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from torchvision import transforms
 import math
+from torch import nn
 
 os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
 
