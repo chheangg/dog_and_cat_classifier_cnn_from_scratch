@@ -1,15 +1,16 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
-from torchvision import transforms, models
 from tqdm import tqdm
 import gc
 import os
 import json
 from datetime import datetime
+from torchvision import transforms
+from torch import nn
 
-# Import your custom dataset
+os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
+
+from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, LinearRegression
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
@@ -19,44 +20,27 @@ BATCH_SIZE = 64
 NUM_CLASSES = 2
 VALIDATION_SPLIT = 0.2
 
-def create_resnet_model(num_classes=2, pretrained=True, dropout_rate=0.3):
-    """
-    Create a ResNet50 model with custom classifier head
-    
-    Args:
-        num_classes: Number of output classes
-        pretrained: Whether to use pretrained weights
-        dropout_rate: Dropout rate for the classifier
-    """
-    # Load pretrained ResNet50
-    model = models.resnet50(pretrained=pretrained)
-    
-    # Get the number of features from the last layer
-    num_features = model.fc.in_features
-    
-    # Replace the classifier with our custom head
-    model.fc = nn.Sequential(
-        nn.Dropout(dropout_rate),
-        nn.Linear(num_features, 512),
-        nn.ReLU(inplace=True),
-        nn.Dropout(dropout_rate),
-        nn.Linear(512, 256),
-        nn.ReLU(inplace=True),
-        nn.Dropout(dropout_rate),
-        nn.Linear(256, num_classes)
-    )
-    
-    return model
+def kaiming_init(module):
+    """Apply Kaiming initialization to Conv2D and Linear layers"""
+    if isinstance(module, Conv2D):
+        # He normal initialization for conv layers
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+        if module.b is not None:
+            nn.init.zeros_(module.b)
+    elif isinstance(module, LinearRegression):
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='linear')
+        if module.b is not None:
+            nn.init.zeros_(module.b)
 
 def log_weight_stats(model):
-    """Print mean and std for each layer"""
+    """Print mean and std for each Conv2D and Linear layer"""
     print("📊 Weight Statistics:")
     for name, module in model.named_modules():
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            if hasattr(module, 'weight') and module.weight is not None:
-                w_mean = module.weight.mean().item()
-                w_std = module.weight.std().item()
-                print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
+        if isinstance(module, (Conv2D, LinearRegression)):
+            w_mean = module.w.mean().item()
+            w_std = module.w.std().item()
+            print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
+
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -108,7 +92,7 @@ def load_checkpoint(model, optimizer=None):
 def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
     """Save model checkpoint"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+    
     checkpoint = {
         'epoch': epoch + 1,
         'model_state_dict': model.state_dict(),
@@ -122,24 +106,22 @@ def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is
             'num_epochs': NUM_EPOCHS
         }
     }
-
+    
     # Save regular checkpoint
     checkpoint_path = f'../models/training_checkpoints/checkpoint_epoch_{epoch+1}_{timestamp}.pth'
     torch.save(checkpoint, checkpoint_path)
-
+    
     # Save as best model if it's the best so far
     if is_best:
         best_model_path = f'../models/best_model_{timestamp}.pth'
         torch.save(checkpoint, best_model_path)
         print(f"💾 Saved best model: {best_model_path}")
-
+    
     # Also save training history as JSON for easy analysis
     history_path = f'../models/training_checkpoints/training_history.json'
-    # Convert any Tensors in training_history to standard Python types before saving
-    serializable_history = [{k: v.item() if isinstance(v, torch.Tensor) else v for k, v in d.items()} for d in training_history]
     with open(history_path, 'w') as f:
-        json.dump(serializable_history, f, indent=2)
-
+        json.dump(training_history, f, indent=2)
+    
     return checkpoint_path
 
 def save_final_model(model, training_history, final_val_loss, final_val_acc):
@@ -164,50 +146,20 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
     print(f"🎯 Saved final model: {final_path}")
     return final_path
 
-def adjust_learning_rate(optimizer, epoch, base_lr=LEARNING_RATE, schedule=[20, 35], gamma=0.1):
-    """
-    Reduce learning rate at specific epochs.
-    
-    schedule: list of epochs to decay at
-    gamma: decay factor
-    """
-    lr = base_lr
-    for milestone in schedule:
-        if epoch >= milestone:
-            lr *= gamma
-    
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-    
-    return lr
+# --- Instantiate Model ---
+model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
-# --- Create Model ---
-print("🏗️ Creating ResNet50 model...")
-model = create_resnet_model(num_classes=NUM_CLASSES, pretrained=False, dropout_rate=0.3)
-model = model.to(device)
-
-# Initialize only the new classifier layers (if using pretrained weights)
-def init_classifier_weights(m):
-    if isinstance(m, nn.Linear):
-        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-
-# Apply initialization only to the classifier
-model.fc.apply(init_classifier_weights)
+# Apply Kaiming initialization recursively
+model.apply(kaiming_init)
 
 # Log initial weight statistics
 log_weight_stats(model)
 
-# --- Optimizer and Loss Function ---
-# Use AdamW for better performance with ResNet
-optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-# Alternative: SGD with momentum
-# optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9, weight_decay=1e-4)
+# Use model's own optimizer and loss function
+optimizer = model.configure_optimizers()
+criterion = model.loss
 
-criterion = nn.CrossEntropyLoss()
-
-print(f"✅ Using AdamW optimizer and CrossEntropyLoss")
+print(f"✅ Using model's built-in optimizer and loss function")
 
 # Load checkpoint if exists
 start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
@@ -262,13 +214,8 @@ val_loader = DataLoader(val_subset,
                        pin_memory=True,
                        num_workers=2)
 
-# --- Training Loop ---
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 for epoch in range(start_epoch, NUM_EPOCHS):
-    # --- Adjust learning rate ---
-    current_lr = adjust_learning_rate(optimizer, epoch)
-    print(f"🔧 Epoch {epoch+1} | Learning Rate: {current_lr:.5f}")
-    
     model.train()
     train_loss = 0
     correct = 0
@@ -280,14 +227,16 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         images, labels = images.to(device), labels.to(device)
         
         optimizer.zero_grad()
+        
         outputs = model(images)
         loss = criterion(outputs, labels)
+    
         
         loss.backward()
         optimizer.step()
         
-        # Pure loss for logging
-        pure_loss = loss.item()
+        # Note: We need to subtract the L2 penalty for accurate loss reporting
+        pure_loss = loss
         train_loss += pure_loss * images.size(0)
         
         _, predicted = outputs.max(1)
@@ -295,12 +244,12 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         correct += predicted.eq(labels).sum().item()
         
         progress_bar.set_postfix({
-            'loss': f'{pure_loss:.4f}',
+            'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
         })
     
-    # --- Validation ---
+    # Validation (NO L2 regularization during validation)
     model.eval()
     val_loss = 0
     val_correct = 0
@@ -309,27 +258,27 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     with torch.no_grad():
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
+            
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs, labels)  # No L2 for validation
             
             val_loss += loss.item() * images.size(0)
             _, predicted = outputs.max(1)
             val_total += labels.size(0)
             val_correct += predicted.eq(labels).sum().item()
     
-    avg_train_loss = train_loss / len(train_subset)
+    avg_train_loss = train_loss / len(train_dataset)
     train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_subset)
+    avg_val_loss = val_loss / len(val_dataset)
     val_acc = 100. * val_correct / val_total
     
-    # --- Save epoch stats ---
+    # Save epoch stats
     epoch_stats = {
         'epoch': epoch + 1,
         'train_loss': avg_train_loss,
         'train_acc': train_acc,
         'val_loss': avg_val_loss,
         'val_acc': val_acc,
-        'learning_rate': current_lr,
         'timestamp': datetime.now().isoformat(),
     }
     training_history.append(epoch_stats)
@@ -338,30 +287,30 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
     
-    # Log weight stats (less frequently to avoid clutter)
-    if (epoch + 1) % 10 == 0 or epoch == 0:
-        log_weight_stats(model)
+    log_weight_stats(model)
     
-    # Check best model
+    # Check if this is the best model
     is_best = avg_val_loss < best_val_loss
     if is_best:
         best_val_loss = avg_val_loss
         best_val_acc = val_acc
         print("   🎯 New best model!")
     
-    # Save checkpoint
+    # Save checkpoint (every epoch)
     checkpoint_path = save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best)
     print(f"   💾 Checkpoint saved: {checkpoint_path}")
     
     clear_memory()
 
-# --- Final Model Save ---
+# --- After Training Completion ---
 print(f"\n🎯 Training completed!")
 print(f"   Best Validation Loss: {best_val_loss:.4f}")
 print(f"   Best Validation Accuracy: {best_val_acc:.2f}%")
 print(f"   Total Epochs Trained: {len(training_history)}")
 
+# Save final model
 final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
+
 print("🌟 Training finished! 🌟")
 print(f"📁 Models saved in: models/")
 print(f"📁 Checkpoints saved in: models/training_checkpoints")
