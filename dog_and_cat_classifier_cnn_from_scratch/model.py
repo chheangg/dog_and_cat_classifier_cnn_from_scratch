@@ -141,7 +141,7 @@ class Conv2D(d2l.Module):
         # Reshape the output matrix to the correct tensor shape
         output_tensor = output_matrix.view(batch_size, self.out_channels, output_height, output_width)
 
-        return output_tensor + self.b[None, :, None, None] if self.bias else 0  
+        return output_tensor + self.b.view(1, -1, 1, 1) if self.bias else 0  
     
 class MaxPool2d(d2l.Module):
     def __init__(self, kernel_size, stride=None, padding=0):
