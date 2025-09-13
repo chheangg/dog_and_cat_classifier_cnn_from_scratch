@@ -1,337 +1,374 @@
 import torch
-from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
-import gc
-import os
-import json
-from datetime import datetime
-from torchvision import transforms
 from torch import nn
+from torch.utils.data import Dataset, DataLoader
+import pandas as pd
+from d2l import torch as d2l
+from torch.nn import functional as F
 
-os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
+# utils
+def MSE(y_hat, y):
+    n = y.numel()
+    return torch.sum((y - y_hat) ** 2) / n
 
-from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, LinearRegression
-from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
+class SGDFromScratch(torch.optim.Optimizer):
+    def __init__(self, params, lr=0.01):
+        defaults = dict(lr=lr)
+        super().__init__(params, defaults)
+        self.lr = lr 
 
-# --- Hyperparameters ---
-LEARNING_RATE = 0.0005
-NUM_EPOCHS = 50
-BATCH_SIZE = 64
-NUM_CLASSES = 2
-VALIDATION_SPLIT = 0.2
-
-def kaiming_init(module):
-    """Apply Kaiming initialization to Conv2D and Linear layers"""
-    if isinstance(module, Conv2D):
-        # He normal initialization for conv layers
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
-        if module.b is not None:
-            nn.init.zeros_(module.b)
-    elif isinstance(module, LinearRegression):
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='linear')
-        if module.b is not None:
-            nn.init.zeros_(module.b)
-
-def log_weight_stats(model):
-    """Print mean and std for each Conv2D and Linear layer"""
-    print("📊 Weight Statistics:")
-    for name, module in model.named_modules():
-        if isinstance(module, (Conv2D, LinearRegression)):
-            w_mean = module.w.mean().item()
-            w_std = module.w.std().item()
-            print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
-
-
-# --- Setup ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-# Create directories for saving
-os.makedirs('../models', exist_ok=True)
-os.makedirs('../models/training_checkpoints', exist_ok=True)
-
-def clear_memory():
-    torch.cuda.empty_cache()
-    gc.collect()
-
-clear_memory()
-
-# --- Automatic Model Loading ---
-def find_latest_checkpoint():
-    """Find the latest checkpoint file"""
-    checkpoints = [f for f in os.listdir('../models/training_checkpoints') if f.endswith('.pth')]
-    if not checkpoints:
-        return None
-    
-    # Sort by modification time (newest first)
-    checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join('../models/training_checkpoints', x)), reverse=True)
-    return os.path.join('../models/training_checkpoints', checkpoints[0])
-
-def load_checkpoint(model, optimizer=None):
-    """Load model from checkpoint"""
-    checkpoint_path = find_latest_checkpoint()
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        print(f"📂 Loading checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
         
-        model.load_state_dict(checkpoint['model_state_dict'])
-        start_epoch = checkpoint['epoch']
-        best_val_loss = checkpoint['best_val_loss']
-        training_history = checkpoint['training_history']
+        for group in self.param_groups:
+            for param in group['params']:
+                if param.grad is not None:
+                    # FIXED: Use correct add_() syntax
+                    param.data.add_(-self.lr * param.grad.data)
         
-        if optimizer and 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        return loss
+
+    def zero_grad(self):
+        for group in self.param_groups:
+            for param in group['params']:
+                if param.grad is not None:
+                    param.grad.zero_()
+                    
+def softmax(o):
+    o_max = o.max(dim=1, keepdim=True).values
+    transformed_logits = o - o_max
+    return torch.exp(transformed_logits) / torch.exp(transformed_logits).sum(dim=1, keepdim=True)
+
+def CrossEntropyError(y_hat, y):
+    row_indices = torch.arange(y.shape[0])
+    return -torch.log(y_hat[row_indices, y]).mean()
+
+# model from 1.0-building-blocks.ipynb
+class LinearRegression(d2l.Module):
+    def __init__(self, in_features, out_features, lr=0.01, bias=True):
+        super().__init__()
+        # weight, add requires_grad=True to perform manual weight changes
+        self.w = nn.Parameter(torch.normal(0, 0.01, (in_features, out_features)))
+        # bias
+        self.b = nn.Parameter(torch.zeros(out_features) if bias else None)
+        # will be covered later
+        self.lr = lr
+        self.bias = bias
+
+    def forward(self, X):
+        return torch.matmul(X, self.w) + self.b
+
+class SoftmaxRegression(d2l.Classifier):
+    def __init__(self, in_features, out_features, lr=0.01, bias=True):
+        super().__init__()
+        self.lr = lr
+        self.bias = bias
+        self.net = LinearRegression(in_features, out_features, lr, bias)
         
-        print(f"🔄 Resuming from epoch {start_epoch}")
-        return start_epoch, best_val_loss, training_history
+    def forward(self, X):
+        X = X.reshape((-1, self.net.w.shape[0]))
+        logits = self.net(X)  # Use the internal network
+        print(logits)
+        return softmax(logits)
+
+# models from 2.0-cnn-layer.ipynb
+class Conv2D(d2l.Module):
+    def __init__(self, in_channels, out_channels, kernel_size,
+                 padding=0, stride=1, lr=0.01, bias=True):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.bias = bias
+        self.w = nn.Parameter(torch.normal(0, 0.01, (out_channels, in_channels, kernel_size, kernel_size)))
+        self.b = nn.Parameter(torch.zeros(out_channels)) if bias else None
     
-    print("🚀 No checkpoint found, starting fresh training")
-    return 0, float('inf'), []
-
-# --- Automatic Model Saving ---
-def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
-    """Save model checkpoint"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    checkpoint = {
-        'epoch': epoch + 1,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'best_val_loss': best_val_loss,
-        'training_history': training_history,
-        'timestamp': timestamp,
-        'hyperparameters': {
-            'learning_rate': LEARNING_RATE,
-            'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS
-        }
-    }
-
-    # Save regular checkpoint
-    checkpoint_path = f'../models/training_checkpoints/checkpoint_epoch_{epoch+1}_{timestamp}.pth'
-    torch.save(checkpoint, checkpoint_path)
-
-    # Save as best model if it's the best so far
-    if is_best:
-        best_model_path = f'../models/best_model_{timestamp}.pth'
-        torch.save(checkpoint, best_model_path)
-        print(f"💾 Saved best model: {best_model_path}")
-
-    # Also save training history as JSON for easy analysis
-    history_path = f'../models/training_checkpoints/training_history.json'
-    # Convert any Tensors in training_history to standard Python types before saving
-    serializable_history = [{k: v.item() if isinstance(v, torch.Tensor) else v for k, v in d.items()} for d in training_history]
-    with open(history_path, 'w') as f:
-        json.dump(serializable_history, f, indent=2)
-
-    return checkpoint_path
-
-def save_final_model(model, training_history, final_val_loss, final_val_acc):
-    """Save final model after training completes"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    final_checkpoint = {
-        'model_state_dict': model.state_dict(),
-        'final_val_loss': final_val_loss,
-        'final_val_acc': final_val_acc,
-        'training_history': training_history,
-        'timestamp': timestamp,
-        'hyperparameters': {
-            'learning_rate': LEARNING_RATE,
-            'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS
-        }
-    }
-    
-    final_path = f'../models/final_model_{timestamp}.pth'
-    torch.save(final_checkpoint, final_path)
-    print(f"🎯 Saved final model: {final_path}")
-    return final_path
-
-def adjust_learning_rate(optimizer, epoch, base_lr=LEARNING_RATE, schedule=[20, 35], gamma=0.1):
-    """
-    Reduce learning rate at specific epochs.
-    
-    schedule: list of epochs to decay at
-    gamma: decay factor
-    """
-    lr = base_lr
-    for milestone in schedule:
-        if epoch >= milestone:
-            lr *= gamma
-    
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-    
-    return lr
-
-
-# --- Instantiate Model ---
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
-
-# Apply Kaiming initialization recursively
-model.apply(kaiming_init)
-
-# Log initial weight statistics
-log_weight_stats(model)
-
-# Use model's own optimizer and loss function
-optimizer = model.configure_optimizers()
-criterion = model.loss
-
-print(f"✅ Using model's built-in optimizer and loss function")
-
-# Load checkpoint if exists
-start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
-
-# --- Dataset and DataLoaders ---
-# Define separate transforms for training and validation
-train_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(degrees=15),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    transforms.RandomGrayscale(p=0.1),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-val_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-# Create two separate datasets with the correct transforms
-train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
-val_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=val_transform)
-
-# Determine the split sizes
-dataset_size = len(train_dataset)
-val_size = int(VALIDATION_SPLIT * dataset_size)
-train_size = dataset_size - val_size
-
-# Create a list of indices for splitting
-indices = torch.randperm(dataset_size).tolist()
-train_indices = indices[:train_size]
-val_indices = indices[train_size:]
-
-# Create subsets from the new indices
-train_subset = torch.utils.data.Subset(train_dataset, train_indices)
-val_subset = torch.utils.data.Subset(val_dataset, val_indices)
-
-print(f"📊 Training: {len(train_subset)} samples")
-print(f"📊 Validation: {len(val_subset)} samples")
-
-train_loader = DataLoader(train_subset, 
-                         batch_size=BATCH_SIZE,
-                         shuffle=True,
-                         pin_memory=True,
-                         num_workers=4)
-
-val_loader = DataLoader(val_subset,
-                       batch_size=BATCH_SIZE * 2,
-                       shuffle=False,
-                       pin_memory=True,
-                       num_workers=2)
-
-print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
-for epoch in range(start_epoch, NUM_EPOCHS):
-    # --- Adjust learning rate ---
-    current_lr = adjust_learning_rate(optimizer, epoch)
-    print(f"🔧 Epoch {epoch+1} | Learning Rate: {current_lr:.5f}")
-    
-    model.train()
-    train_loss = 0
-    correct = 0
-    total = 0
-    
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
-    
-    for batch_idx, (images, labels) in enumerate(progress_bar):
-        images, labels = images.to(device), labels.to(device)
+    def forward(self, X):
+        # create dimension
+        p = self.padding
+        s = self.stride
+        k = self.kernel_size
         
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        
-        loss.backward()
-        optimizer.step()
-        
-        # Pure loss for logging
-        pure_loss = loss.item()
-        train_loss += pure_loss * images.size(0)
-        
-        _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
-        
-        progress_bar.set_postfix({
-            'loss': f'{pure_loss:.4f}',
-            'acc': f'{100.*correct/total:.2f}%',
-            'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-        })
-    
-    # --- Validation ---
-    model.eval()
-    val_loss = 0
-    val_correct = 0
-    val_total = 0
-    
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+        # # if padding gt 1
+        # if p > 0:
+        #     batch_size, channels, height, width = X.shape
+        #     padded_tensor = torch.zeros((batch_size, channels, height + 2 * p, width + 2 * p),
+        #                                 dtype=X.dtype, device=X.device)
+        #     padded_tensor[:, :, p:height + p, p:width + p] = X
+        #     X = padded_tensor
             
-            val_loss += loss.item() * images.size(0)
-            _, predicted = outputs.max(1)
-            val_total += labels.size(0)
-            val_correct += predicted.eq(labels).sum().item()
-    
-    avg_train_loss = train_loss / len(train_dataset)
-    train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_dataset)
-    val_acc = 100. * val_correct / val_total
-    
-    # --- Save epoch stats ---
-    epoch_stats = {
-        'epoch': epoch + 1,
-        'train_loss': avg_train_loss,
-        'train_acc': train_acc,
-        'val_loss': avg_val_loss,
-        'val_acc': val_acc,
-        'learning_rate': current_lr,
-        'timestamp': datetime.now().isoformat(),
-    }
-    training_history.append(epoch_stats)
-    
-    print(f"\n📊 Epoch {epoch+1}:")
-    print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-    print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-    
-    # Log weight stats
-    log_weight_stats(model)
-    
-    # Check best model
-    is_best = avg_val_loss < best_val_loss
-    if is_best:
-        best_val_loss = avg_val_loss
-        best_val_acc = val_acc
-        print("   🎯 New best model!")
-    
-    # Save checkpoint
-    checkpoint_path = save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best)
-    print(f"   💾 Checkpoint saved: {checkpoint_path}")
-    
-    clear_memory()
+        ## NAIVE IMPLEMENTATION, SUPER SLOW!!
+        # # Output size calculation
+        # batch_size, channels, input_height, input_width = X.shape
+        # output_height = (input_height - k) // s + 1
+        # output_width = (input_width - k) // s + 1
 
-# --- Final Model Save ---
-print(f"\n🎯 Training completed!")
-print(f"   Best Validation Loss: {best_val_loss:.4f}")
-print(f"   Best Validation Accuracy: {best_val_acc:.2f}%")
-print(f"   Total Epochs Trained: {len(training_history)}")
+        # # Create the result tensor
+        # result = torch.zeros((batch_size, self.out_channels, output_height, output_width),
+        #                      dtype=X.dtype, device=X.device)
+        
+        # # Manual loop-based convolution
+        # for b in range(batch_size):
+        #     for i in range(output_height):
+        #         for j in range(output_width):
+        #             for out_c in range(self.out_channels):
+        #                 # Extract the slice of the input tensor
+        #                 input_slice = X[b, :, i * s : i * s + k, j * s : j * s + k]
+        #                 # Grab the corresponding kernel
+        #                 kernel = self.w[out_c]
+        #                 # Perform element-wise multiplication and sum
+        #                 result[b, out_c, i, j] = (input_slice * kernel).sum()
+        #                 if self.b is not None:
+        #                     result[b, out_c, i, j] += self.b[out_c]
 
-final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
-print("🌟 Training finished! 🌟")
-print(f"📁 Models saved in: models/")
-print(f"📁 Checkpoints saved in: models/training_checkpoints")
+        # return result
+            
+        # unfold X into flattened_kernel_size * patches
+        unfolded_X = F.unfold(X, kernel_size=k, stride=s, padding=p)
+        
+        # unfold weight into out_channel * flattened_kernel_size
+        unfolded_weight = self.w.view(self.out_channels, -1)
+        
+        # Perform matrix multiplication
+        output_matrix = unfolded_weight @ unfolded_X
+        
+        # Calculate output dimensions
+        batch_size, _, input_height, input_width = X.shape
+        output_height = (input_height - k + 2 * p) // s + 1
+        output_width = (input_width - k + 2 * p) // s + 1
+        
+        # Reshape the output matrix to the correct tensor shape
+        output_tensor = output_matrix.view(batch_size, self.out_channels, output_height, output_width)
+
+        return output_tensor + self.b.view(1, -1, 1, 1) if self.bias else 0  
+    
+class MaxPool2d(d2l.Module):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+
+    def forward(self, X):
+        # Unfold the tensor into patches
+        unfolded_X = F.unfold(X, kernel_size=self.kernel_size, padding=self.padding, stride=self.stride)
+        
+        batch_size, _, L = unfolded_X.shape
+        channels = X.shape[1]
+    
+        # unfold x furthers
+        unfolded_X = unfolded_X.view(
+            batch_size, channels, self.kernel_size * self.kernel_size, L
+        )
+        
+        # Take max over kernel dimension (not channels)
+        pooled_X = unfolded_X.max(dim=2)[0]  # shape: (batch_size, channels, L)
+            
+        # Get the original dimensions
+        height, width = X.shape[2], X.shape[3]
+        
+        # Correctly calculate output height and width using original dimensions.
+        output_height = (height + 2 * self.padding - self.kernel_size) // self.stride + 1
+        output_width = (width + 2 * self.padding - self.kernel_size) // self.stride + 1
+        
+        # Reshape the pooled output back to the correct 4D tensor shape.
+        output = pooled_X.view(batch_size, channels, output_height, output_width)
+        
+        return output
+
+class GlobalAvgPool2d(d2l.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return X.mean(dim=[2, 3], keepdim=True)
+    
+class ReLU(d2l.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return torch.max(torch.tensor(0.0), X)
+
+class Dropout(d2l.Module):
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+        
+    def forward(self, X):
+        # During inference, just return X unchanged
+        if not self.training:
+            return X
+        
+        # Create a mask with the same shape as X
+        mask = (torch.rand(X.shape, device=X.device) > self.p).float()
+        
+        # Apply the mask and scale to maintain the expected value
+        return X * mask / (1 - self.p)
+    
+def L2Regularization(w, lambd):
+    return (lambd / 2) * torch.norm(w, 2) ** 2
+    
+# models from 3.0-resnet-architecture.ipynb
+
+# The following definitions are a direct copy from the d2l, I'm too lazy to work this one out
+def batch_norm(X, gamma, beta, moving_mean, moving_var, eps, momentum):
+    # Use is_grad_enabled to determine whether we are in training mode
+    if not torch.is_grad_enabled():
+        # In prediction mode, use mean and variance obtained by moving average
+        X_hat = (X - moving_mean) / torch.sqrt(moving_var + eps)
+    else:
+        assert len(X.shape) in (2, 4)
+        if len(X.shape) == 2:
+            # When using a fully connected layer, calculate the mean and
+            # variance on the feature dimension
+            mean = X.mean(dim=0)
+            var = ((X - mean) ** 2).mean(dim=0)
+        else:
+            # When using a two-dimensional convolutional layer, calculate the
+            # mean and variance on the channel dimension (axis=1). Here we
+            # need to maintain the shape of X, so that the broadcasting
+            # operation can be carried out later
+            mean = X.mean(dim=(0, 2, 3), keepdim=True)
+            var = ((X - mean) ** 2).mean(dim=(0, 2, 3), keepdim=True)
+        # In training mode, the current mean and variance are used
+        X_hat = (X - mean) / torch.sqrt(var + eps)
+        # Update the mean and variance using moving average
+        moving_mean = (1.0 - momentum) * moving_mean + momentum * mean
+        moving_var = (1.0 - momentum) * moving_var + momentum * var
+    Y = gamma * X_hat + beta  # Scale and shift
+    return Y, moving_mean.data, moving_var.data
+
+class BatchNorm2d(d2l.Module):    
+    # num_features: the number of outputs for a fully connected layer or the
+    # number of output channels for a convolutional layer. num_dims: 2 for a
+    # fully connected layer and 4 for a convolutional layer
+    def __init__(self, num_features, num_dims):
+        super().__init__()
+        if num_dims == 2:
+            shape = (1, num_features)
+        else:
+            shape = (1, num_features, 1, 1)
+        # The scale parameter and the shift parameter (model parameters) are
+        # initialized to 1 and 0, respectively
+        self.gamma = nn.Parameter(torch.ones(shape))
+        self.beta = nn.Parameter(torch.zeros(shape))
+        # The variables that are not model parameters are initialized to 0 and
+        # 1
+        self.moving_mean = torch.zeros(shape)
+        self.moving_var = torch.ones(shape)
+
+    def forward(self, X):
+        # If X is not on the main memory, copy moving_mean and moving_var to
+        # the device where X is located
+        if self.moving_mean.device != X.device:
+            self.moving_mean = self.moving_mean.to(X.device)
+            self.moving_var = self.moving_var.to(X.device)
+        # Save the updated moving_mean and moving_var
+        Y, self.moving_mean, self.moving_var = batch_norm(
+            X, self.gamma, self.beta, self.moving_mean,
+            self.moving_var, eps=1e-5, momentum=0.1)
+        return Y
+    
+class ResNetLayer(d2l.Module):
+    def __init__(self, in_channels, out_channels, use_1x1conv=False, strides=1):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        self.ReLU = ReLU()
+        
+        self.conv1 = Conv2D(in_channels, out_channels, kernel_size=1, stride=strides)
+        self.bn1 = BatchNorm2d(out_channels, 4)
+        self.conv2 = Conv2D(out_channels, out_channels, kernel_size=3, padding=1, stride=1)
+        self.bn2 = BatchNorm2d(out_channels, 4)
+        self.conv3 = Conv2D(out_channels, out_channels * 4, kernel_size=1, stride=1)
+        self.bn3 = BatchNorm2d(out_channels * 4, 4)
+        
+        # Skip connection to match input/output dimensions if needed
+        if use_1x1conv:
+            self.conv4 = Conv2D(in_channels, out_channels * 4, kernel_size=1, stride=strides)
+        else:
+            self.conv4 = None
+        
+        self.ReLU = ReLU()
+    
+    def forward(self, X):
+        Y = self.ReLU(self.bn1(self.conv1(X)))
+        Y = self.ReLU(self.bn2(self.conv2(Y)))
+        Y = self.bn3(self.conv3(Y))
+        
+        # add skip connection
+        if self.conv4:
+            X = self.conv4(X)
+            
+        Y += X
+        
+        return self.ReLU(Y)
+
+class ResNet50(d2l.Classifier):
+    def __init__(self, num_classes, lr,  in_channels=1, dropout_rate=0.5):
+        super().__init__()
+        self.lr = lr
+        self.bias = True
+        self.dropout_rate = dropout_rate
+        self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2, padding=3)
+        self.bn1 = BatchNorm2d(64, 4)
+        self.relu = ReLU()
+        self.pool1 = MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.dropout1 = Dropout(p=dropout_rate)
+        self.conv2 = nn.Sequential(
+            ResNetLayer(in_channels=64, out_channels=64, use_1x1conv=True, strides=1),
+            ResNetLayer(in_channels=256, out_channels=64),
+            ResNetLayer(in_channels=256, out_channels=64)
+        )
+        self.conv3 = nn.Sequential(
+            ResNetLayer(in_channels=256, out_channels=128, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=512, out_channels=128),
+            ResNetLayer(in_channels=512, out_channels=128),
+            ResNetLayer(in_channels=512, out_channels=128)
+        )
+        self.conv4 = nn.Sequential(
+            ResNetLayer(in_channels=512, out_channels=256, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+            ResNetLayer(in_channels=1024, out_channels=256),
+        )
+        self.conv5 = nn.Sequential(
+            ResNetLayer(in_channels=1024, out_channels=512, use_1x1conv=True, strides=2),
+            ResNetLayer(in_channels=2048, out_channels=512),
+            ResNetLayer(in_channels=2048, out_channels=512),
+        )
+        self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
+        self.dropout2 = Dropout(p=self.dropout_rate)
+        self.softmax = SoftmaxRegression(2048, num_classes, lr=self.lr, bias=self.bias)
+    
+    def forward(self, X):
+        Y = self.relu(self.bn1(self.conv1(X)))
+        Y = self.pool1(Y)
+        Y = self.dropout1(Y)
+        
+        Y = self.conv2(Y)
+        Y = self.conv3(Y)
+        Y = self.conv4(Y)
+        Y = self.conv5(Y)
+        
+        Y = self.pool2(Y)
+        Y = Y.reshape(Y.shape[0], -1)
+        
+        Y = self.dropout2(Y)
+        Y = self.softmax(Y)
+        
+        return Y
+        
+        
+    def loss(self, y_hat, y):
+        return CrossEntropyError(y_hat, y)
+    
+    def configure_optimizers(self):
+        return SGDFromScratch(self.parameters(), self.lr)
