@@ -214,7 +214,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             l2_lambda = 1e-4  # L2 regularization strength
             l2_reg = torch.tensor(0., device=device)
             for param in model.parameters():
-                l2_reg += L2Regularization(param, l2_reg)
+                l2_reg += L2Regularization(param, l2_lambda)
             
             loss = loss + l2_reg
             loss = loss / GRADIENT_ACCUMULATION_STEPS
