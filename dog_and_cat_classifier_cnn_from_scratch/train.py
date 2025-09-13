@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 from datetime import datetime
@@ -45,9 +44,6 @@ train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
 print(f"Training samples: {train_size}, Validation samples: {val_size}")
-
-# Initialize TensorBoard writer
-writer = SummaryWriter(f'./runs/dog_cat_classifier_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
 
 # Track best validation accuracy
 best_val_accuracy = 0.0
@@ -126,13 +122,6 @@ for epoch in range(NUM_EPOCHS):
     # Update learning rate scheduler
     scheduler.step(avg_val_loss)
     
-    # Log metrics to TensorBoard
-    writer.add_scalar('Loss/train', avg_train_loss, epoch)
-    writer.add_scalar('Loss/val', avg_val_loss, epoch)
-    writer.add_scalar('Accuracy/train', avg_train_accuracy, epoch)
-    writer.add_scalar('Accuracy/val', avg_val_accuracy, epoch)
-    writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], epoch)
-    
     # Save checkpoint
     checkpoint = {
         'epoch': epoch,
@@ -159,7 +148,6 @@ for epoch in range(NUM_EPOCHS):
     print(f"Best Val Accuracy: {best_val_accuracy:.4f}\n")
 
 print("🌟 Training finished! 🌟")
-writer.close()
 
 # Plot training history
 plt.figure(figsize=(12, 5))
