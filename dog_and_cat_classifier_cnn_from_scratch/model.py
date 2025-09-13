@@ -36,7 +36,10 @@ class SGDFromScratch(torch.optim.Optimizer):
                     param.grad.zero_()
                     
 def softmax(o):
-    return nn.functional.softmax(o)
+    o_max = o.max(dim=1, keepdim=True).values
+    transformed_logits = o - o_max
+    print(f"1: {o}")
+    return torch.exp(transformed_logits) / torch.exp(transformed_logits).sum(dim=1, keepdim=True)
 
 def CrossEntropyError(y_hat, y):
     row_indices = torch.arange(y.shape[0])
@@ -360,6 +363,7 @@ class ResNet50(d2l.Classifier):
         
         Y = self.dropout2(Y)
         Y = self.softmax(Y)
+        print(f"2: {Y}")
         
         return Y
         
