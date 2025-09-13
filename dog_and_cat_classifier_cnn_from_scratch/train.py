@@ -6,7 +6,7 @@ import os
 import json
 from datetime import datetime
 from torchvision import transforms
-
+import math
 
 os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
 
@@ -19,11 +19,33 @@ torch.backends.cudnn.benchmark = True
 
 # --- Hyperparameters ---
 LEARNING_RATE = 0.01
-NUM_EPOCHS = 50
+NUM_EPOCHS = 90
 BATCH_SIZE = 8
 NUM_CLASSES = 2
 GRADIENT_ACCUMULATION_STEPS = 16
 VALIDATION_SPLIT = 0.2
+
+# --- Kaiming Initialization Functions ---
+def kaiming_init_linear(module):
+    """Initialize Linear layers with Kaiming initialization"""
+    if hasattr(module, 'w') and module.w is not None:
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+    if hasattr(module, 'b') and module.b is not None:
+        nn.init.constant_(module.b, 0)
+
+def kaiming_init_conv2d(module):
+    """Initialize Conv2D layers with Kaiming initialization"""
+    if hasattr(module, 'w') and module.w is not None:
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+    if hasattr(module, 'b') and module.b is not None:
+        nn.init.constant_(module.b, 0)
+
+def init_weights_xavier(m):
+    """Xavier initialization for other layers if needed"""
+    if isinstance(m, (nn.Linear, nn.Conv2d)):
+        nn.init.xavier_normal_(m.weight)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -132,6 +154,18 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
+# Apply Kaiming initialization to all layers
+print("🔧 Applying Kaiming initialization to all layers...")
+for module in model.modules():
+    if hasattr(module, '__class__'):
+        class_name = module.__class__.__name__
+        if class_name == 'LinearRegression':
+            kaiming_init_linear(module)
+        elif class_name == 'Conv2D':
+            kaiming_init_conv2d(module)
+
+print("✅ Kaiming initialization applied successfully!")
+
 # Use model's own optimizer and loss function
 optimizer = model.configure_optimizers()
 criterion = model.loss
@@ -140,6 +174,9 @@ print(f"✅ Using model's built-in optimizer and loss function")
 
 # Load checkpoint if exists
 start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
+
+# If we're starting from scratch, we've already applied Kaiming initialization
+# If we loaded a checkpoint, the weights are already set from the checkpoint
 
 # Mixed precision
 scaler = torch.cuda.amp.GradScaler()
