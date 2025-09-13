@@ -37,21 +37,6 @@ def get_learning_rate(epoch):
     else:
         return LEARNING_RATE * 0.01
 
-# --- Kaiming Initialization Functions ---
-def kaiming_init_linear(module):
-    """Initialize Linear layers with Kaiming initialization"""
-    if hasattr(module, 'w') and module.w is not None:
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
-    if hasattr(module, 'b') and module.b is not None:
-        nn.init.constant_(module.b, 0)
-
-def kaiming_init_conv2d(module):
-    """Initialize Conv2D layers with Kaiming initialization"""
-    if hasattr(module, 'w') and module.w is not None:
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
-    if hasattr(module, 'b') and module.b is not None:
-        nn.init.constant_(module.b, 0)
-
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -160,18 +145,6 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
 
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
-
-# Apply Kaiming initialization to all layers
-print("🔧 Applying Kaiming initialization to all layers...")
-for module in model.modules():
-    if hasattr(module, '__class__'):
-        class_name = module.__class__.__name__
-        if class_name == 'LinearRegression':
-            kaiming_init_linear(module)
-        elif class_name == 'Conv2D':
-            kaiming_init_conv2d(module)
-
-print("✅ Kaiming initialization applied successfully!")
 
 # Use model's own optimizer and loss function
 optimizer = model.configure_optimizers()
