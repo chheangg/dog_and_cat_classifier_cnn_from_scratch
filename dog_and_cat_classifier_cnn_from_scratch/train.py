@@ -49,7 +49,7 @@ def initialize_weights(model):
                 print(f"   ✅ Initialized {name}.gamma/beta with ones/zeros")
 
 # --- Setup ---
-device = torch.device("mps" if torch.mps.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Create directories for saving
