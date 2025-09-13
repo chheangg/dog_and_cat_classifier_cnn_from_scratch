@@ -67,7 +67,8 @@ class SoftmaxRegression(d2l.Classifier):
         
     def forward(self, X):
         X = X.reshape((-1, self.net.w.shape[0]))
-        return softmax(torch.matmul(X, self.net.w) + self.net.b)
+        logits = self.net(X)  # Use the internal network
+        return softmax(logits)
 
 # models from 2.0-cnn-layer.ipynb
 class Conv2D(d2l.Module):

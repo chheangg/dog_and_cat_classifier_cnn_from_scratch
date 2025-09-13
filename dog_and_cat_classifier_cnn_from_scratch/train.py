@@ -6,9 +6,11 @@ import os
 import json
 from datetime import datetime
 from torchvision import transforms
+import torch.nn as nn
+from torchvision.transforms import functional as F
 
 # --- Import your custom modules ---
-from model import ResNet50, L2Regularization
+from model import ResNet50, L2Regularization, BatchNorm2d, Conv2D, LinearRegression
 from data import CatAndDogDataset
 
 # --- Memory Optimization Setup ---
@@ -23,8 +25,31 @@ NUM_CLASSES = 2
 GRADIENT_ACCUMULATION_STEPS = 16
 VALIDATION_SPLIT = 0.2
 
+# --- Weight Initialization Function ---
+def initialize_weights(model):
+    """Apply Kaiming initialization to custom layers"""
+    print("🔧 Applying Kaiming weight initialization...")
+    
+    for name, module in model.named_modules():
+        if hasattr(module, 'w') and hasattr(module.w, 'data'):
+            # Kaiming initialization for weights
+            if isinstance(module, (Conv2D, LinearRegression)):
+                nn.init.kaiming_normal_(module.w.data, mode='fan_out', nonlinearity='relu')
+                print(f"   ✅ Initialized {name}.w with Kaiming")
+                
+                if hasattr(module, 'b') and module.b is not None:
+                    nn.init.constant_(module.b.data, 0)
+                    print(f"   ✅ Initialized {name}.b with zeros")
+        
+        elif hasattr(module, 'gamma') and hasattr(module.gamma, 'data'):
+            # BatchNorm initialization
+            if isinstance(module, BatchNorm2d):
+                nn.init.constant_(module.gamma.data, 1)
+                nn.init.constant_(module.beta.data, 0)
+                print(f"   ✅ Initialized {name}.gamma/beta with ones/zeros")
+
 # --- Setup ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("mps" if torch.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Create directories for saving
@@ -36,6 +61,46 @@ def clear_memory():
     gc.collect()
 
 clear_memory()
+
+# --- Instantiate Model ---
+model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
+
+# Apply weight initialization
+initialize_weights(model)
+
+# Use model's own optimizer and loss function
+optimizer = model.configure_optimizers()
+criterion = model.loss
+
+print(f"✅ Using model's built-in optimizer and loss function")
+
+# --- Gradient Clipping Function ---
+def clip_gradients(model, max_norm=1.0):
+    """Clip gradients to prevent explosion"""
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** (1. / 2)
+    
+    clip_coef = max_norm / (total_norm + 1e-6)
+    if clip_coef < 1:
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.data.mul_(clip_coef)
+    
+    return total_norm
+
+# --- Learning Rate Warmup ---
+def warmup_learning_rate(optimizer, epoch, warmup_epochs=5, base_lr=0.01):
+    """Linear learning rate warmup"""
+    if epoch < warmup_epochs:
+        lr = base_lr * (epoch + 1) / warmup_epochs
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+        return lr
+    return base_lr
 
 # --- Automatic Model Loading ---
 def find_latest_checkpoint():
@@ -127,15 +192,6 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
     print(f"🎯 Saved final model: {final_path}")
     return final_path
 
-# --- Instantiate Model ---
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
-
-# Use model's own optimizer and loss function
-optimizer = model.configure_optimizers()
-criterion = model.loss
-
-print(f"✅ Using model's built-in optimizer and loss function")
-
 # Load checkpoint if exists
 start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
 
@@ -145,7 +201,6 @@ scaler = torch.cuda.amp.GradScaler()
 # --- Dataset and DataLoaders ---
 # Define separate transforms for training and validation
 train_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.RandomRotation(degrees=15),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
@@ -155,9 +210,9 @@ train_transform = transforms.Compose([
 ])
 
 val_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+
 
 # Create two separate datasets with the correct transforms
 train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
@@ -183,17 +238,20 @@ print(f"📊 Validation: {len(val_subset)} samples")
 train_loader = DataLoader(train_subset, 
                          batch_size=BATCH_SIZE,
                          shuffle=True,
-                         pin_memory=True,
-                         num_workers=4)
+                         pin_memory=False,
+                         num_workers=0)
 
 val_loader = DataLoader(val_subset,
                        batch_size=BATCH_SIZE * 2,
                        shuffle=False,
-                       pin_memory=True,
-                       num_workers=2)
+                       pin_memory=False,
+                       num_workers=0)
 
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 for epoch in range(start_epoch, NUM_EPOCHS):
+    # Learning rate warmup
+    current_lr = warmup_learning_rate(optimizer, epoch)
+    
     model.train()
     train_loss = 0
     correct = 0
@@ -222,6 +280,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         scaler.scale(loss).backward()
         
         if (batch_idx + 1) % GRADIENT_ACCUMULATION_STEPS == 0 or (batch_idx + 1) == len(train_loader):
+            # Gradient clipping to prevent explosion
+            grad_norm = clip_gradients(model, max_norm=1.0)
+            
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
@@ -241,7 +302,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-            'L2': f'{(l2_lambda / 2) * l2_reg.item():.6f}'  # Show L2 penalty
+            'L2': f'{(l2_lambda / 2) * l2_reg.item():.6f}',  # Show L2 penalty
+            'lr': f'{current_lr:.6f}',
+            'grad_norm': f'{grad_norm:.4f}'
         })
     
     # Validation (NO L2 regularization during validation)
@@ -276,7 +339,8 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         'val_loss': avg_val_loss,
         'val_acc': val_acc,
         'timestamp': datetime.now().isoformat(),
-        'l2_lambda': l2_lambda  # Track L2 strength
+        'l2_lambda': l2_lambda,
+        'learning_rate': current_lr
     }
     training_history.append(epoch_stats)
     
@@ -284,6 +348,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
     print(f"   L2 Regularization: λ = {l2_lambda}")
+    print(f"   Learning Rate: {current_lr:.6f}")
     
     # Check if this is the best model
     is_best = avg_val_loss < best_val_loss
