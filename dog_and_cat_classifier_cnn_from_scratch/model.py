@@ -281,14 +281,15 @@ class ResNetLayer(d2l.Module):
         
         self.conv1 = Conv2D(in_channels, out_channels, kernel_size=1, stride=strides)
         self.bn1 = BatchNorm2d(out_channels, 4)
-        self.conv2 = Conv2D(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = Conv2D(out_channels, out_channels, kernel_size=3, padding=1, stride=1)
         self.bn2 = BatchNorm2d(out_channels, 4)
-        self.conv3 = Conv2D(out_channels, out_channels * 4, kernel_size=1)
+        self.conv3 = Conv2D(out_channels, out_channels * 4, kernel_size=1, stride=1)
         self.bn3 = BatchNorm2d(out_channels * 4, 4)
         
         # Skip connection to match input/output dimensions if needed
         if use_1x1conv:
             self.conv4 = Conv2D(in_channels, out_channels * 4, kernel_size=1, stride=strides)
+            self.bn4 = BatchNorm2d(out_channels * 4, 4)
         else:
             self.conv4 = None
         
@@ -314,7 +315,7 @@ class ResNet50(d2l.Classifier):
         self.bias = True
         self.dropout_rate = dropout_rate
         self.conv1 = Conv2D(kernel_size=7, in_channels=in_channels, out_channels=64, stride=2, padding=3)
-        self.bn1 = BatchNorm2d(64)
+        self.bn1 = BatchNorm2d(64, 4)
         self.relu = ReLU()
         self.pool1 = MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.dropout1 = Dropout(p=dropout_rate)
@@ -347,8 +348,9 @@ class ResNet50(d2l.Classifier):
         self.softmax = SoftmaxRegression(2048, num_classes, lr=self.lr, bias=self.bias)
     
     def forward(self, X):
-        Y = self.pool1(self.conv1(X))
-        Y = self.dropout1(Y)  # Dropout after initial feature extraction
+        Y = self.relu(self.bn1(self.conv1(X)))
+        Y = self.pool1(Y)
+        Y = self.dropout1(Y)
         
         Y = self.conv2(Y)
         Y = self.conv3(Y)
