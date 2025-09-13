@@ -302,7 +302,7 @@ class ResNetLayer(d2l.Module):
         
         # add skip connection
         if self.conv4:
-            X = self.self.conv4(X)
+            X = self.conv4(X)
             
         Y += X
         
