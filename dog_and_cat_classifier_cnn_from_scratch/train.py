@@ -174,7 +174,7 @@ for module in model.modules():
 print("✅ Kaiming initialization applied successfully!")
 
 # Use model's own optimizer and loss function
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = model.configure_optimizers()
 criterion = model.loss
 
 print(f"✅ Using model's built-in optimizer and loss function")
