@@ -367,7 +367,7 @@ class ResNet50(d2l.Classifier):
         
         
     def loss(self, y_hat, y):
-        return CrossEntropyError(y_hat, y)
+        return nn.CrossEntropyLoss(y_hat, y)
     
     def configure_optimizers(self):
         return SGDFromScratch(self.parameters(), self.lr)

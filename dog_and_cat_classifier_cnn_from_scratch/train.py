@@ -127,7 +127,7 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
 # Use model's own optimizer and loss function
-optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
+optimizer = model.configure_optimizers()
 criterion = model.loss
 
 print(f"✅ Using model's built-in optimizer and loss function")
