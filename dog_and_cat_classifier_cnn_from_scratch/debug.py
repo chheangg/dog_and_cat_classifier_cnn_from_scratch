@@ -432,6 +432,20 @@ def run_comprehensive_debug(model, train_loader, device='cuda'):
         # Clean up hooks
         debugger.cleanup()
 
+def kaiming_init_linear(module):
+    """Initialize Linear layers with Kaiming initialization"""
+    if hasattr(module, 'w') and module.w is not None:
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+    if hasattr(module, 'b') and module.b is not None:
+        nn.init.constant_(module.b, 0)
+
+def kaiming_init_conv2d(module):
+    """Initialize Conv2D layers with Kaiming initialization"""
+    if hasattr(module, 'w') and module.w is not None:
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+    if hasattr(module, 'b') and module.b is not None:
+        nn.init.constant_(module.b, 0)
+        
 # Example usage function
 def debug_your_model():
     """
@@ -450,9 +464,9 @@ def debug_your_model():
         if hasattr(module, '__class__'):
             class_name = module.__class__.__name__
             if class_name == 'LinearRegression':
-                nn.kaiming_init_linear(module)
+                kaiming_init_linear(module)
             elif class_name == 'Conv2D':
-                nn.kaiming_init_conv2d(module)
+                kaiming_init_conv2d(module)
     
     # Load your dataset
     train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True)
