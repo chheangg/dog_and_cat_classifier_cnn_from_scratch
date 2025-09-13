@@ -1,16 +1,15 @@
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
+from torchvision import transforms, models
 from tqdm import tqdm
 import gc
 import os
 import json
 from datetime import datetime
-from torchvision import transforms
-from torch import nn
 
-os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
-
-from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, LinearRegression
+# Import your custom dataset
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
@@ -20,27 +19,44 @@ BATCH_SIZE = 64
 NUM_CLASSES = 2
 VALIDATION_SPLIT = 0.2
 
-def kaiming_init(module):
-    """Apply Kaiming initialization to Conv2D and Linear layers"""
-    if isinstance(module, Conv2D):
-        # He normal initialization for conv layers
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
-        if module.b is not None:
-            nn.init.zeros_(module.b)
-    elif isinstance(module, LinearRegression):
-        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='linear')
-        if module.b is not None:
-            nn.init.zeros_(module.b)
+def create_resnet_model(num_classes=2, pretrained=True, dropout_rate=0.3):
+    """
+    Create a ResNet50 model with custom classifier head
+    
+    Args:
+        num_classes: Number of output classes
+        pretrained: Whether to use pretrained weights
+        dropout_rate: Dropout rate for the classifier
+    """
+    # Load pretrained ResNet50
+    model = models.resnet50(pretrained=pretrained)
+    
+    # Get the number of features from the last layer
+    num_features = model.fc.in_features
+    
+    # Replace the classifier with our custom head
+    model.fc = nn.Sequential(
+        nn.Dropout(dropout_rate),
+        nn.Linear(num_features, 512),
+        nn.ReLU(inplace=True),
+        nn.Dropout(dropout_rate),
+        nn.Linear(512, 256),
+        nn.ReLU(inplace=True),
+        nn.Dropout(dropout_rate),
+        nn.Linear(256, num_classes)
+    )
+    
+    return model
 
 def log_weight_stats(model):
-    """Print mean and std for each Conv2D and Linear layer"""
+    """Print mean and std for each layer"""
     print("📊 Weight Statistics:")
     for name, module in model.named_modules():
-        if isinstance(module, (Conv2D, LinearRegression)):
-            w_mean = module.w.mean().item()
-            w_std = module.w.std().item()
-            print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
-
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            if hasattr(module, 'weight') and module.weight is not None:
+                w_mean = module.weight.mean().item()
+                w_std = module.weight.std().item()
+                print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -165,24 +181,33 @@ def adjust_learning_rate(optimizer, epoch, base_lr=LEARNING_RATE, schedule=[20, 
     
     return lr
 
+# --- Create Model ---
+print("🏗️ Creating ResNet50 model...")
+model = create_resnet_model(num_classes=NUM_CLASSES, pretrained=False, dropout_rate=0.3)
+model = model.to(device)
 
-# --- Instantiate Model ---
-model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
+# Initialize only the new classifier layers (if using pretrained weights)
+def init_classifier_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
 
-# Apply Kaiming initialization recursively
-model.apply(kaiming_init)
+# Apply initialization only to the classifier
+model.fc.apply(init_classifier_weights)
 
 # Log initial weight statistics
 log_weight_stats(model)
 
-import torch.optim as optim
+# --- Optimizer and Loss Function ---
+# Use AdamW for better performance with ResNet
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+# Alternative: SGD with momentum
+# optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9, weight_decay=1e-4)
 
+criterion = nn.CrossEntropyLoss()
 
-# Use model's own optimizer and loss function
-optimizer = optim.SGD(model.parameters(), lr=model.lr)
-criterion = model.loss
-
-print(f"✅ Using model's built-in optimizer and loss function")
+print(f"✅ Using AdamW optimizer and CrossEntropyLoss")
 
 # Load checkpoint if exists
 start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
@@ -237,6 +262,7 @@ val_loader = DataLoader(val_subset,
                        pin_memory=True,
                        num_workers=2)
 
+# --- Training Loop ---
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 for epoch in range(start_epoch, NUM_EPOCHS):
     # --- Adjust learning rate ---
@@ -291,9 +317,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             val_total += labels.size(0)
             val_correct += predicted.eq(labels).sum().item()
     
-    avg_train_loss = train_loss / len(train_dataset)
+    avg_train_loss = train_loss / len(train_subset)
     train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_dataset)
+    avg_val_loss = val_loss / len(val_subset)
     val_acc = 100. * val_correct / val_total
     
     # --- Save epoch stats ---
@@ -312,8 +338,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
     
-    # Log weight stats
-    log_weight_stats(model)
+    # Log weight stats (less frequently to avoid clutter)
+    if (epoch + 1) % 10 == 0 or epoch == 0:
+        log_weight_stats(model)
     
     # Check best model
     is_best = avg_val_loss < best_val_loss
