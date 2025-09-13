@@ -6,18 +6,41 @@ import os
 import json
 from datetime import datetime
 from torchvision import transforms
+from torch import nn
 
 os.path.abspath(os.path.join(os.getcwd(), '..', 'dog_and_cat_classifier_cnn_from_scratch'))
 
-from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, L2Regularization
+from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, LinearRegression
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.1
+LEARNING_RATE = 0.01
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2
 VALIDATION_SPLIT = 0.2
+
+def kaiming_init(module):
+    """Apply Kaiming initialization to Conv2D and Linear layers"""
+    if isinstance(module, Conv2D):
+        # He normal initialization for conv layers
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
+        if module.b is not None:
+            nn.init.zeros_(module.b)
+    elif isinstance(module, LinearRegression):
+        nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='linear')
+        if module.b is not None:
+            nn.init.zeros_(module.b)
+
+def log_weight_stats(model):
+    """Print mean and std for each Conv2D and Linear layer"""
+    print("📊 Weight Statistics:")
+    for name, module in model.named_modules():
+        if isinstance(module, (Conv2D, LinearRegression)):
+            w_mean = module.w.mean().item()
+            w_std = module.w.std().item()
+            print(f" - {name}: mean={w_mean:.4f}, std={w_std:.4f}")
+
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -126,6 +149,12 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
+# Apply Kaiming initialization recursively
+model.apply(kaiming_init)
+
+# Log initial weight statistics
+log_weight_stats(model)
+
 # Use model's own optimizer and loss function
 optimizer = model.configure_optimizers()
 criterion = model.loss
@@ -201,20 +230,13 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         
         outputs = model(images)
         loss = criterion(outputs, labels)
-        
-        # Add L2 regularization manually
-        l2_lambda = 1e-4  # L2 regularization strength
-        l2_reg = torch.tensor(0., device=device)
-        for param in model.parameters():
-            l2_reg += L2Regularization(param, l2_lambda)
-        
-        loss = loss + l2_reg
+    
         
         loss.backward()
         optimizer.step()
         
         # Note: We need to subtract the L2 penalty for accurate loss reporting
-        pure_loss = loss.item() - (l2_lambda / 2) * l2_reg.item()
+        pure_loss = loss
         train_loss += pure_loss * images.size(0)
         
         _, predicted = outputs.max(1)
@@ -225,7 +247,6 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-            'L2': f'{(l2_lambda / 2) * l2_reg.item():.6f}'  # Show L2 penalty
         })
     
     # Validation (NO L2 regularization during validation)
@@ -259,14 +280,15 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         'val_loss': avg_val_loss,
         'val_acc': val_acc,
         'timestamp': datetime.now().isoformat(),
-        'l2_lambda': l2_lambda  # Track L2 strength
     }
     training_history.append(epoch_stats)
     
     print(f"\n📊 Epoch {epoch+1}:")
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-    print(f"   L2 Regularization: λ = {l2_lambda}")
+    
+    # Log initial weight statistics
+    log_weight_stats(model)
     
     # Check if this is the best model
     is_best = avg_val_loss < best_val_loss
