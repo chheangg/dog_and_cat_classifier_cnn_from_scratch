@@ -89,7 +89,6 @@ def load_checkpoint(model, optimizer=None):
     return 0, float('inf'), []
 
 # --- Automatic Model Saving ---
-# --- Automatic Model Saving ---
 def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best=False):
     """Save model checkpoint"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -148,6 +147,24 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
     torch.save(final_checkpoint, final_path)
     print(f"🎯 Saved final model: {final_path}")
     return final_path
+
+def adjust_learning_rate(optimizer, epoch, base_lr=LEARNING_RATE, schedule=[20, 35], gamma=0.1):
+    """
+    Reduce learning rate at specific epochs.
+    
+    schedule: list of epochs to decay at
+    gamma: decay factor
+    """
+    lr = base_lr
+    for milestone in schedule:
+        if epoch >= milestone:
+            lr *= gamma
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    
+    return lr
+
 
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
@@ -219,6 +236,10 @@ val_loader = DataLoader(val_subset,
 
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 for epoch in range(start_epoch, NUM_EPOCHS):
+    # --- Adjust learning rate ---
+    current_lr = adjust_learning_rate(optimizer, epoch)
+    print(f"🔧 Epoch {epoch+1} | Learning Rate: {current_lr:.5f}")
+    
     model.train()
     train_loss = 0
     correct = 0
@@ -230,15 +251,13 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         images, labels = images.to(device), labels.to(device)
         
         optimizer.zero_grad()
-        
         outputs = model(images)
         loss = criterion(outputs, labels)
-    
         
         loss.backward()
         optimizer.step()
         
-        # Note: We need to subtract the L2 penalty for accurate loss reporting
+        # Pure loss for logging
         pure_loss = loss.item()
         train_loss += pure_loss * images.size(0)
         
@@ -247,12 +266,12 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         correct += predicted.eq(labels).sum().item()
         
         progress_bar.set_postfix({
-            'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
+            'loss': f'{pure_loss:.4f}',
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
         })
     
-    # Validation (NO L2 regularization during validation)
+    # --- Validation ---
     model.eval()
     val_loss = 0
     val_correct = 0
@@ -261,9 +280,8 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     with torch.no_grad():
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
-            
             outputs = model(images)
-            loss = criterion(outputs, labels)  # No L2 for validation
+            loss = criterion(outputs, labels)
             
             val_loss += loss.item() * images.size(0)
             _, predicted = outputs.max(1)
@@ -275,13 +293,14 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     avg_val_loss = val_loss / len(val_dataset)
     val_acc = 100. * val_correct / val_total
     
-    # Save epoch stats
+    # --- Save epoch stats ---
     epoch_stats = {
         'epoch': epoch + 1,
         'train_loss': avg_train_loss,
         'train_acc': train_acc,
         'val_loss': avg_val_loss,
         'val_acc': val_acc,
+        'learning_rate': current_lr,
         'timestamp': datetime.now().isoformat(),
     }
     training_history.append(epoch_stats)
@@ -290,31 +309,29 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
     
-    # Log initial weight statistics
+    # Log weight stats
     log_weight_stats(model)
     
-    # Check if this is the best model
+    # Check best model
     is_best = avg_val_loss < best_val_loss
     if is_best:
         best_val_loss = avg_val_loss
         best_val_acc = val_acc
         print("   🎯 New best model!")
     
-    # Save checkpoint (every epoch)
+    # Save checkpoint
     checkpoint_path = save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is_best)
     print(f"   💾 Checkpoint saved: {checkpoint_path}")
     
     clear_memory()
 
-# --- After Training Completion ---
+# --- Final Model Save ---
 print(f"\n🎯 Training completed!")
 print(f"   Best Validation Loss: {best_val_loss:.4f}")
 print(f"   Best Validation Accuracy: {best_val_acc:.2f}%")
 print(f"   Total Epochs Trained: {len(training_history)}")
 
-# Save final model
 final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
-
 print("🌟 Training finished! 🌟")
 print(f"📁 Models saved in: models/")
 print(f"📁 Checkpoints saved in: models/training_checkpoints")
