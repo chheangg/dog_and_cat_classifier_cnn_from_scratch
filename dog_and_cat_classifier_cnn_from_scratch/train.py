@@ -19,12 +19,23 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 torch.backends.cudnn.benchmark = True
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.1  # Higher initial LR for larger batch size
 NUM_EPOCHS = 90
-BATCH_SIZE = 8
+BATCH_SIZE = 64  # Increased batch size
 NUM_CLASSES = 2
-GRADIENT_ACCUMULATION_STEPS = 16
+GRADIENT_ACCUMULATION_STEPS = 2  # Reduced accumulation steps for larger batch size
 VALIDATION_SPLIT = 0.2
+L2_LAMBDA = 1e-4  # L2 regularization strength
+
+# --- Learning Rate Schedule ---
+def get_learning_rate(epoch):
+    """Simple step-based learning rate schedule"""
+    if epoch < 30:
+        return LEARNING_RATE
+    elif epoch < 60:
+        return LEARNING_RATE * 0.1
+    else:
+        return LEARNING_RATE * 0.01
 
 # --- Kaiming Initialization Functions ---
 def kaiming_init_linear(module):
@@ -40,13 +51,6 @@ def kaiming_init_conv2d(module):
         nn.init.kaiming_normal_(module.w, mode='fan_out', nonlinearity='relu')
     if hasattr(module, 'b') and module.b is not None:
         nn.init.constant_(module.b, 0)
-
-def init_weights_xavier(m):
-    """Xavier initialization for other layers if needed"""
-    if isinstance(m, (nn.Linear, nn.Conv2d)):
-        nn.init.xavier_normal_(m.weight)
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
 
 # --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,7 +113,8 @@ def save_checkpoint(epoch, model, optimizer, best_val_loss, training_history, is
         'hyperparameters': {
             'learning_rate': LEARNING_RATE,
             'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS
+            'num_epochs': NUM_EPOCHS,
+            'l2_lambda': L2_LAMBDA
         }
     }
     
@@ -143,7 +148,8 @@ def save_final_model(model, training_history, final_val_loss, final_val_acc):
         'hyperparameters': {
             'learning_rate': LEARNING_RATE,
             'batch_size': BATCH_SIZE,
-            'num_epochs': NUM_EPOCHS
+            'num_epochs': NUM_EPOCHS,
+            'l2_lambda': L2_LAMBDA
         }
     }
     
@@ -175,9 +181,6 @@ print(f"✅ Using model's built-in optimizer and loss function")
 
 # Load checkpoint if exists
 start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
-
-# If we're starting from scratch, we've already applied Kaiming initialization
-# If we loaded a checkpoint, the weights are already set from the checkpoint
 
 # Mixed precision
 scaler = torch.cuda.amp.GradScaler()
@@ -234,12 +237,17 @@ val_loader = DataLoader(val_subset,
 
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
 for epoch in range(start_epoch, NUM_EPOCHS):
+    # Update learning rate based on schedule
+    current_lr = get_learning_rate(epoch)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = current_lr
+    
     model.train()
     train_loss = 0
     correct = 0
     total = 0
     
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [LR: {current_lr:.4f}]")
     
     optimizer.zero_grad()
     
@@ -251,10 +259,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             loss = criterion(outputs, labels)
             
             # Add L2 regularization manually
-            l2_lambda = 1e-4  # L2 regularization strength
             l2_reg = torch.tensor(0., device=device)
             for param in model.parameters():
-                l2_reg += L2Regularization(param, l2_lambda)
+                l2_reg += L2Regularization(param, L2_LAMBDA)
             
             loss = loss + l2_reg
             loss = loss / GRADIENT_ACCUMULATION_STEPS
@@ -270,7 +277,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
                 clear_memory()
         
         # Note: We need to subtract the L2 penalty for accurate loss reporting
-        pure_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS - (l2_lambda / 2) * l2_reg.item() / GRADIENT_ACCUMULATION_STEPS
+        pure_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS - (L2_LAMBDA / 2) * l2_reg.item() / GRADIENT_ACCUMULATION_STEPS
         train_loss += pure_loss * images.size(0)
         
         _, predicted = outputs.max(1)
@@ -281,7 +288,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             'loss': f'{pure_loss:.4f}',  # Show pure loss without L2
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-            'L2': f'{(l2_lambda / 2) * l2_reg.item():.6f}'  # Show L2 penalty
+            'L2': f'{(L2_LAMBDA / 2) * l2_reg.item():.6f}'  # Show L2 penalty
         })
     
     # Validation (NO L2 regularization during validation)
@@ -303,9 +310,9 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             val_total += labels.size(0)
             val_correct += predicted.eq(labels).sum().item()
     
-    avg_train_loss = train_loss / len(train_dataset)
+    avg_train_loss = train_loss / len(train_subset)
     train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_dataset)
+    avg_val_loss = val_loss / len(val_subset)
     val_acc = 100. * val_correct / val_total
     
     # Save epoch stats
@@ -315,15 +322,17 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         'train_acc': train_acc,
         'val_loss': avg_val_loss,
         'val_acc': val_acc,
+        'learning_rate': current_lr,
         'timestamp': datetime.now().isoformat(),
-        'l2_lambda': l2_lambda  # Track L2 strength
+        'l2_lambda': L2_LAMBDA
     }
     training_history.append(epoch_stats)
     
     print(f"\n📊 Epoch {epoch+1}:")
     print(f"   Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
     print(f"   Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-    print(f"   L2 Regularization: λ = {l2_lambda}")
+    print(f"   Learning Rate: {current_lr:.6f}")
+    print(f"   L2 Regularization: λ = {L2_LAMBDA}")
     
     # Check if this is the best model
     is_best = avg_val_loss < best_val_loss
