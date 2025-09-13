@@ -289,7 +289,6 @@ class ResNetLayer(d2l.Module):
         # Skip connection to match input/output dimensions if needed
         if use_1x1conv:
             self.conv4 = Conv2D(in_channels, out_channels * 4, kernel_size=1, stride=strides)
-            self.bn4 = BatchNorm2d(out_channels * 4, 4)
         else:
             self.conv4 = None
         
