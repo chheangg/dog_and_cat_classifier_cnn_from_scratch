@@ -236,7 +236,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         optimizer.step()
         
         # Note: We need to subtract the L2 penalty for accurate loss reporting
-        pure_loss = loss
+        pure_loss = loss.item()
         train_loss += pure_loss * images.size(0)
         
         _, predicted = outputs.max(1)
