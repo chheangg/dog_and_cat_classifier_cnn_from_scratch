@@ -457,7 +457,7 @@ def debug_your_model():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Load your model
-    model = ResNet50(num_classes=2, lr=0.1, in_channels=3, dropout_rate=0.3).to(device)
+    model = ResNet50(num_classes=2, lr=0.01, in_channels=3, dropout_rate=0.3).to(device)
     
     # Apply Kaiming initialization (your existing code)
     for module in model.modules():
@@ -470,7 +470,7 @@ def debug_your_model():
     
     # Load your dataset
     train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True)
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=2)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2)
     
     # Run debug analysis
     debug_results = run_comprehensive_debug(model, train_loader, device)
