@@ -5,7 +5,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from tqdm import tqdm
 
@@ -58,10 +58,13 @@ def initialize_weights(model):
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 initialize_weights(model)
 
-# --- Optimizer and loss ---
-optimizer = model.configure_optimizers()
+# --- Use model's built-in loss function ---
 criterion = model.loss
-print(f"✅ Using model's built-in optimizer and loss function")
+print(f"✅ Using model's built-in loss function: {type(criterion).__name__}")
+
+# --- Optimizer ---
+optimizer = model.configure_optimizers()
+print(f"✅ Using model's built-in optimizer")
 
 # --- Checkpoint Utilities ---
 def find_latest_checkpoint():
@@ -134,30 +137,16 @@ start_epoch, best_val_loss, training_history = load_checkpoint(model, optimizer)
 scaler = torch.cuda.amp.GradScaler()
 
 # --- Dataset and DataLoaders ---
-train_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(degrees=15),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    transforms.RandomGrayscale(p=0.1),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-val_transform = transforms.Compose([
-    transforms.Lambda(lambda x: x / 255.0),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+# Use None transforms since the dataset already handles them internally
+train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=None)
+val_dataset = CatAndDogDataset(img_dir='../data/processed', train=False, transform=None)
 
-train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
-val_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=val_transform)
-
+# Split into train and validation
 dataset_size = len(train_dataset)
 val_size = int(VALIDATION_SPLIT * dataset_size)
 train_size = dataset_size - val_size
 
-indices = torch.randperm(dataset_size).tolist()
-train_subset = torch.utils.data.Subset(train_dataset, indices[:train_size])
-val_subset = torch.utils.data.Subset(val_dataset, indices[train_size:])
+train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=4)
 val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE*2, shuffle=False, pin_memory=True, num_workers=2)
@@ -165,6 +154,13 @@ val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE*2, shuffle=False, pin_
 print(f"📊 Training: {len(train_subset)} samples")
 print(f"📊 Validation: {len(val_subset)} samples")
 print(f"\n🚀 Starting training from epoch {start_epoch + 1}...")
+
+# --- Debug: Check dataset labels ---
+print("🧪 Checking dataset labels...")
+for i, (images, labels) in enumerate(train_loader):
+    print(f"Batch {i}: labels = {labels.unique(return_counts=True)}")
+    if i >= 2:  # Check first few batches
+        break
 
 # --- Training Loop ---
 for epoch in range(start_epoch, NUM_EPOCHS):
@@ -175,15 +171,25 @@ for epoch in range(start_epoch, NUM_EPOCHS):
 
     for batch_idx, (images, labels) in enumerate(progress_bar):
         images, labels = images.to(device), labels.to(device)
+        
+        # Ensure labels are long tensors
+        if labels.dtype != torch.long:
+            labels = labels.long()
 
         with torch.cuda.amp.autocast():
             outputs = model(images)
             loss = criterion(outputs, labels)
+            
+            # Add L2 regularization using your L2Regularization function
             l2_lambda = 1e-4
-            l2_reg = sum(L2Regularization(p, l2_lambda) for p in model.parameters())
-            loss = (loss + l2_reg) / GRADIENT_ACCUMULATION_STEPS
+            l2_reg = 0.0
+            for param in model.parameters():
+                l2_reg += L2Regularization(param, l2_lambda)
+            
+            total_loss = loss + l2_reg
+            total_loss = total_loss / GRADIENT_ACCUMULATION_STEPS
 
-        scaler.scale(loss).backward()
+        scaler.scale(total_loss).backward()
 
         if (batch_idx + 1) % GRADIENT_ACCUMULATION_STEPS == 0 or (batch_idx + 1) == len(train_loader):
             scaler.step(optimizer)
@@ -192,8 +198,10 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             if batch_idx % 20 == 0:
                 clear_memory()
 
-        pure_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS - (l2_lambda/2) * l2_reg.item()/GRADIENT_ACCUMULATION_STEPS
+        # Calculate pure loss without regularization for reporting
+        pure_loss = loss.item()
         train_loss += pure_loss * images.size(0)
+        
         _, predicted = outputs.max(1)
         total += labels.size(0)
         correct += predicted.eq(labels).sum().item()
@@ -202,7 +210,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
             'loss': f'{pure_loss:.4f}',
             'acc': f'{100.*correct/total:.2f}%',
             'mem': f'{torch.cuda.memory_allocated()/1024**3:.2f}GB',
-            'L2': f'{(l2_lambda/2)*l2_reg.item():.6f}',
+            'L2': f'{l2_reg.item():.6f}',
         })
 
     # --- Validation ---
@@ -211,17 +219,20 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     with torch.no_grad():
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
+            if labels.dtype != torch.long:
+                labels = labels.long()
+                
             with torch.cuda.amp.autocast():
                 outputs = model(images)
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels)  # Use model's loss without L2 for validation
             val_loss += loss.item() * images.size(0)
             _, predicted = outputs.max(1)
             val_total += labels.size(0)
             val_correct += predicted.eq(labels).sum().item()
 
-    avg_train_loss = train_loss / len(train_dataset)
+    avg_train_loss = train_loss / len(train_subset)
     train_acc = 100. * correct / total
-    avg_val_loss = val_loss / len(val_dataset)
+    avg_val_loss = val_loss / len(val_subset)
     val_acc = 100. * val_correct / val_total
 
     epoch_stats = {
@@ -240,6 +251,14 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     print(f"             Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
     print(f"             L2 λ={l2_lambda}, LR={LEARNING_RATE}")
 
+    # Debug: Check model output
+    model.eval()
+    with torch.no_grad():
+        test_input = torch.randn(1, 3, 224, 224).to(device)
+        test_output = model(test_input)
+        print(f"Model output sample: {test_output.cpu().numpy()}")
+        print(f"Softmax: {torch.softmax(test_output, dim=1).cpu().numpy()}")
+
     is_best = avg_val_loss < best_val_loss
     if is_best:
         best_val_loss = avg_val_loss
@@ -255,4 +274,4 @@ for epoch in range(start_epoch, NUM_EPOCHS):
 # --- Save final model ---
 final_path = save_final_model(model, training_history, best_val_loss, best_val_acc)
 print("🌟 Training finished! 🌟")
-print(f"📁 Models")
+print(f"📁 Final model saved: {final_path}")
