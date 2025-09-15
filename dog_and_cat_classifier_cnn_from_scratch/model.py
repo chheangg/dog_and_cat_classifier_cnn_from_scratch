@@ -41,8 +41,8 @@ def softmax(o):
     return torch.exp(transformed_logits) / torch.exp(transformed_logits).sum(dim=1, keepdim=True)
 
 def CrossEntropyError(y_hat, y):
-    row_indices = torch.arange(y.shape[0])
-    return -torch.log(y_hat[row_indices, y]).mean()
+    log_probs = torch.log_softmax(y_hat, dim=1)
+    return -log_probs[torch.arange(y.shape[0]), y].mean()
 
 # model from 1.0-building-blocks.ipynb
 class LinearRegression(d2l.Module):
@@ -350,7 +350,7 @@ class ResNet50(d2l.Classifier):
         )
         self.pool2 = GlobalAvgPool2d()        # Add dropout before the final fully connected layers
         self.dropout2 = Dropout(p=self.dropout_rate)
-        self.softmax = SoftmaxRegression(2048, num_classes, lr=self.lr, bias=self.bias)
+        self.fc = LinearRegression(2048, num_classes, lr=self.lr, bias=self.bias)
     
     def forward(self, X):
         Y = self.relu(self.bn1(self.conv1(X)))
@@ -366,7 +366,7 @@ class ResNet50(d2l.Classifier):
         Y = Y.reshape(Y.shape[0], -1)
         
         Y = self.dropout2(Y)
-        Y = self.softmax(Y)
+        Y = self.fc(Y)
         
         return Y
         

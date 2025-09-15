@@ -16,7 +16,7 @@ from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, Line
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.005
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2
@@ -308,7 +308,6 @@ val_transform = transforms.Compose([
 ])
 
 train_dataset = CatAndDogDataset(img_dir='../data/processed', train=True, transform=train_transform)
-# FIXED: validation dataset must be train=False
 val_dataset = CatAndDogDataset(img_dir='../data/processed', train=False, transform=val_transform)
 
 dataset_size = len(train_dataset)
