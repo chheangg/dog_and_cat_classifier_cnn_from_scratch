@@ -262,8 +262,8 @@ class BatchNorm2d(d2l.Module):
         self.beta = nn.Parameter(torch.zeros(shape))
         # The variables that are not model parameters are initialized to 0 and
         # 1
-        self.moving_mean = torch.zeros(shape)
-        self.moving_var = torch.ones(shape)
+        self.register_buffer('moving_mean', torch.zeros(shape))
+        self.register_buffer('moving_var', torch.ones(shape))
 
     def forward(self, X):
         # If X is not on the main memory, copy moving_mean and moving_var to

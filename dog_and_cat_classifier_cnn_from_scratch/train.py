@@ -268,9 +268,6 @@ def adjust_learning_rate(optimizer, epoch, base_lr=LEARNING_RATE, schedule=[20, 
 # --- Instantiate Model ---
 model = ResNet50(num_classes=NUM_CLASSES, lr=LEARNING_RATE, in_channels=3, dropout_rate=0.3).to(device)
 
-# Apply Kaiming initialization recursively
-model.apply(kaiming_init)
-
 # Ensure final classifier is initialized safely if present (small std, zero bias)
 if hasattr(model, 'fc'):
     try:
