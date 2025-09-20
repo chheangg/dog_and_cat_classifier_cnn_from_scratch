@@ -16,7 +16,7 @@ from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50, Conv2D, Line
 from dog_and_cat_classifier_cnn_from_scratch.data import CatAndDogDataset
 
 # --- Hyperparameters ---
-LEARNING_RATE = 0.005
+LEARNING_RATE = 0.001
 NUM_EPOCHS = 50
 BATCH_SIZE = 64
 NUM_CLASSES = 2

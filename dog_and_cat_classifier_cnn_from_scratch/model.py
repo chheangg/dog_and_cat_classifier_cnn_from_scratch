@@ -260,6 +260,7 @@ class BatchNorm2d(d2l.Module):
         # initialized to 1 and 0, respectively
         self.gamma = nn.Parameter(torch.ones(shape))
         self.beta = nn.Parameter(torch.zeros(shape))
+        # MODIFIED: ADDED REGISTER_BUFFER, NOT HAVING THIS REALLY MESSED ME UP!
         # The variables that are not model parameters are initialized to 0 and
         # 1
         self.register_buffer('moving_mean', torch.zeros(shape))
