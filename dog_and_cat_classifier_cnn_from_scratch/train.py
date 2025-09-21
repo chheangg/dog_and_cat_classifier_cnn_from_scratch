@@ -371,31 +371,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
         optimizer.zero_grad()
         outputs = model(images)
 
-        # Safety check on logits BEFORE backward
-        try:
-            logits_abs_max = float(outputs.detach().abs().max().cpu())
-            logits_mean = float(outputs.detach().mean().cpu())
-        except Exception:
-            logits_abs_max = math.inf
-            logits_mean = math.nan
-
-        if not math.isfinite(logits_mean) or not math.isfinite(logits_abs_max):
-            dump_debug_info(images, labels, model, optimizer, prefix=f"NONFINITE_LOGITS_epoch{epoch+1}_batch{batch_idx}")
-            raise RuntimeError(f"Non-finite logits detected at epoch {epoch+1} batch {batch_idx}")
-
-        # threshold for explosion (you can lower/raise this)
-        EXPLOSION_THRESHOLD = 1e3
-        if logits_abs_max > EXPLOSION_THRESHOLD:
-            dump_debug_info(images, labels, model, optimizer, prefix=f"EXPLODE_epoch{epoch+1}_batch{batch_idx}")
-            raise RuntimeError(f"Exploding logits (max {logits_abs_max:.3g}) at epoch {epoch+1} batch {batch_idx}")
-
         loss = criterion(outputs, labels)
-
-        # check loss finite
-        if not math.isfinite(float(loss.item())):
-            dump_debug_info(images, labels, model, optimizer, prefix=f"NONFINITE_LOSS_epoch{epoch+1}_batch{batch_idx}")
-            raise RuntimeError(f"Non-finite loss at epoch {epoch+1} batch {batch_idx}")
-
         loss.backward()
         optimizer.step()
 

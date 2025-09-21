@@ -11,9 +11,9 @@ scikit-learn
 torch
 d2l==1.0.3
 kaggle
-opencv-python
+opencv-python-headless
 torchvision
-fastapi[standard]
 python-multipart
 redis
 fastapi-limiter
+fastapi[standard]
