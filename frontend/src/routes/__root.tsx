@@ -9,7 +9,7 @@ import { NavigationMenu,
 
 function RootLayout() {
   return (
-    <div className="mx-auto w-full h-screen overflow-hidden container">
+    <div className="mx-auto w-full h-screen container">
       {/* Navigation */}
       <div className='place-items-center grid'>
         <NavigationMenu className="z-5 mt-2 md:mt-4 w-full sm:w-auto max-w-full sm:max-w-auto">
@@ -44,7 +44,7 @@ function RootLayout() {
           </NavigationMenuList>
         </NavigationMenu>
       </div>
-      <main className='mt-8 lg:mt-12 xl:mt-16'>
+      <main className='mt-8 lg:mt-8 xl:mt-12'>
         <Outlet />
       </main>
     </div>
