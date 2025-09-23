@@ -46,7 +46,7 @@ function TakeActionComponents({ setImage } : { setImage: (img: File) => void }) 
   };
 
   return (
-    <>
+    <div className='gap-8 grid sm:grid-cols-2'>
         <ActionButton 
           title='Scan'
           subtitle='Take a picture of a potential dog, or cat.'
@@ -70,7 +70,7 @@ function TakeActionComponents({ setImage } : { setImage: (img: File) => void }) 
             accept=".png,.jpg,.jpeg,.heic"
           />
         </div>
-    </>
+    </div>
   )
 }
 
@@ -108,7 +108,10 @@ function ScanImageComponents({ setImage } : { setImage: (img: File) => void }) {
         </CardHeader>
         <CardContent className='relative'>
           <div className='relative border-2 rounded-lg aspect-video overflow-hidden'>
-            <Camera ref={camera} errorMessages={{
+            <Camera 
+              ref={camera} 
+              facingMode='environment'
+              errorMessages={{
               noCameraAccessible: undefined,
               permissionDenied: undefined,
               switchCamera: undefined,

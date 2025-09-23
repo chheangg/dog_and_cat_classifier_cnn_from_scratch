@@ -2,6 +2,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf'
+import { v4 as uuidv4 } from 'uuid';
+
 // Import the required CSS files
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -26,7 +28,7 @@ export function DocumentComponent({ url } : { url: string }) {
     const observer = new ResizeObserver(() => {
       if (viewerRef.current) {
         // Trigger a re-render by updating the memo dependency
-        setComputedWidth((viewerRef.current.clientWidth || 728) - 64);
+        setComputedWidth((viewerRef.current.clientWidth || 728) - 48);
       }
     });
 
@@ -51,7 +53,7 @@ export function DocumentComponent({ url } : { url: string }) {
           className='m-0 w-full'
           file={{ url }}
           onLoadSuccess={onDocumentLoadSuccess}
-          key={crypto.randomUUID()}
+          key={uuidv4()}
         >
           {Array.from(new Array(numPages), (el, index) => (
             <Page
