@@ -16,4 +16,5 @@ torchvision
 python-multipart
 redis
 fastapi-limiter
+pydantic-settings
 fastapi[standard]

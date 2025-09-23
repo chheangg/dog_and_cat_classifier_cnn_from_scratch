@@ -7,8 +7,10 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-
+from fastapi.middleware.cors import CORSMiddleware
+    
 from dog_and_cat_classifier_cnn_from_scratch.model import ResNet50
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,7 +22,18 @@ async def lifespan(app: FastAPI):
     
     print("FastAPI-Limiter shutting down.")
     
+origins = [
+    "*"
+]
+    
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = ResNet50(num_classes=2, lr=0.01, in_channels=3, dropout_rate=0.3)
@@ -47,7 +60,7 @@ def preprocess_img(img_array):
     return preprocess(image).unsqueeze(0)
 
 
-@app.get('/models/infer')
+@app.post('/model/infer')
 async def infer(file: UploadFile, dependencies=[RateLimiter(times=10, seconds=60)]):
     ALLOWED_IMG = ["image/jpeg", "image/png", "image/jpg"]
     
@@ -64,4 +77,4 @@ async def infer(file: UploadFile, dependencies=[RateLimiter(times=10, seconds=60
     with torch.no_grad():
         result = model(image_tensor)
         
-    return {"result": result.tolist()}
+    return {"result": result[0].tolist()}

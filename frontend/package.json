@@ -13,6 +13,7 @@
     "@radix-ui/react-navigation-menu": "^1.2.14",
     "@radix-ui/react-progress": "^1.1.7",
     "@radix-ui/react-slot": "^1.2.3",
+    "@react-hook/resize-observer": "^2.0.2",
     "@tailwindcss/vite": "^4.1.13",
     "@tanstack/react-query": "^5.89.0",
     "@tanstack/react-router": "^1.131.49",
@@ -24,6 +25,8 @@
     "react": "^19.1.1",
     "react-camera-pro": "^1.4.0",
     "react-dom": "^19.1.1",
+    "react-jupyter-notebook": "^0.4.0",
+    "react-pdf": "^10.1.0",
     "styled-components": "^6.1.19",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.13"
@@ -43,6 +46,7 @@
     "tw-animate-css": "^1.3.8",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.43.0",
-    "vite": "^7.1.6"
+    "vite": "^7.1.6",
+    "vite-plugin-static-copy": "^3.1.2"
   }
 }

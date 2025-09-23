@@ -17,3 +17,4 @@ fastapi[standard]
 python-multipart
 redis
 fastapi-limiter
+pydantic-settings
