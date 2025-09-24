@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { uploadImage } from '@/features/scanner/api/scanner'
-import { AnimalPrediction } from '@/features/scanner/enums/animation-prediction'
 import { ScannerStage } from '@/features/scanner/enums/scanner-stage'
 import { useMutation } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
@@ -180,14 +179,12 @@ function InferImageComponents({ image, result }: { image: File, result: number[]
   const confidence = Math.max(...probabilities);
   const confidencePercentage = Math.round(confidence * 100);
 
-  let prediction: AnimalPrediction;
   let titleText: string;
   let icon: React.ReactNode;
   let description: string;
   let animalName: string;
 
   if (probabilities[0] > probabilities[1] && probabilities[0] > confidenceThreshold) {
-    prediction = AnimalPrediction.Cat;
     animalName = "cat";
     icon = <Cat className="w-8 h-8" />;
     
@@ -205,7 +202,6 @@ function InferImageComponents({ image, result }: { image: File, result: number[]
       description = "The model detects some signs that point toward a cat but with clear hesitation. The features that appear are faint and may not be enough to confirm. Lighting, blur, or unusual position may make it harder to see the normal cat markers. The model leaves open the chance that this is a cat, but also accepts that the match is weak and uncertain.";
     }
   } else if (probabilities[1] > probabilities[0] && probabilities[1] > confidenceThreshold) {
-    prediction = AnimalPrediction.Dog;
     animalName = "dog";
     icon = <Dog className="w-8 h-8" />;
     
@@ -223,7 +219,6 @@ function InferImageComponents({ image, result }: { image: File, result: number[]
       description = "The model detects a few possible dog characteristics but is not confident. It sees weak or partial matches such as outline or posture that may belong to a dog but are not strong enough to confirm. External factors like picture quality or unusual context can explain why the result is uncertain. The model accepts the possibility but with heavy doubt.";
     }
   } else {
-    prediction = AnimalPrediction.Neither;
     titleText = "This doesn't look like a cat or dog";
     icon = <HelpCircle className="w-8 h-8" />;
     description = "The model cannot say this is a cat or a dog with confidence. The features do not match strongly with either one. This could mean the image shows a different animal such as a rabbit, bird, or something else entirely. It may also be that the picture is unclear, has many objects, or is captured in a way that hides the main subject. Because of this, the model cannot classify the image into either cat or dog with trust.";
