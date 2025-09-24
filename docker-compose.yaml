@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     ports: 
       - "3000:3000"
   redis:
@@ -13,14 +15,16 @@ services:
     volumes:
       - redis_data:/data
   
-  nginx:
-    image: nginx:latest
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: nginx_frontend
     ports:
-      - 80:80
-      - 443:443
-    restart: always
+      - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx/conf/:/etc/nginx/conf.d/:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./certbot/www/:/var/www/certbot/:ro
   certbot:
     image: certbot/certbot:latest
