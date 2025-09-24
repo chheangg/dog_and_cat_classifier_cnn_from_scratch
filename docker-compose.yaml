@@ -27,8 +27,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx/conf/:/etc/nginx/conf.d/:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./certbot/www/:/var/www/certbot/:ro
+      - ./certbot/conf/:/etc/letsencrypt/:ro
   certbot:
     image: certbot/certbot:latest
     volumes:
