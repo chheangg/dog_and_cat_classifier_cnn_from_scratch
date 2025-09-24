@@ -19,6 +19,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL
     container_name: nginx_frontend
     ports:
       - "80:80"
