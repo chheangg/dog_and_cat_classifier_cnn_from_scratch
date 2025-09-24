@@ -180,6 +180,7 @@ function InferImageComponents({ image, result }: { image: File, result: number[]
   const confidence = Math.max(...probabilities);
   const confidencePercentage = Math.round(confidence * 100);
 
+  let prediction: AnimalPrediction;
   let titleText: string;
   let icon: React.ReactNode;
   let description: string;
