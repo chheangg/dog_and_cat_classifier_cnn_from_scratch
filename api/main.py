@@ -39,7 +39,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = ResNet50(num_classes=2, lr=0.01, in_channels=3, dropout_rate=0.3)
 
 model_path = "./models/final_model_20250915_092314.pth"
-checkpoint = torch.load(model_path, map_location=device)
+checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.to(device)
 model.eval()
