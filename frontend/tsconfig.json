@@ -14,5 +14,7 @@
       "@/*": ["./src/*"]
     },
     "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmitOnError": false
   }
 }

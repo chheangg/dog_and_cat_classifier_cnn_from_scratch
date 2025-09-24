@@ -8,7 +8,7 @@ import { ScannerStage } from '@/features/scanner/enums/scanner-stage'
 import { useMutation } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { Link } from '@tanstack/react-router'
-import { Aperture, ArrowLeft, Cat, Check, Disc, Dog, HelpCircle, PawPrint, Scan } from 'lucide-react'
+import { Aperture, ArrowLeft, Cat, Check, Disc, Dog, HelpCircle, PawPrint } from 'lucide-react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Camera } from "react-camera-pro";
 
@@ -180,7 +180,6 @@ function InferImageComponents({ image, result }: { image: File, result: number[]
   const confidence = Math.max(...probabilities);
   const confidencePercentage = Math.round(confidence * 100);
 
-  let prediction: AnimalPrediction;
   let titleText: string;
   let icon: React.ReactNode;
   let description: string;

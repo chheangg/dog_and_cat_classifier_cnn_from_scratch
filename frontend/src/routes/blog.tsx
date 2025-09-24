@@ -55,7 +55,7 @@ export function DocumentComponent({ url } : { url: string }) {
           onLoadSuccess={onDocumentLoadSuccess}
           key={uuidv4()}
         >
-          {Array.from(new Array(numPages), (el, index) => (
+          {Array.from(new Array(numPages), (_el, index) => (
             <Page
               className='w-full'
               key={`page_${index + 1}`} 
