@@ -1,4 +1,4 @@
-import { cn } from "../lib/utils";
+import { cn } from "@/libs/utils";
 import { DynamicIcon, type IconName } from 'lucide-react/dynamic';
 
 // from https://github.com/neobrutalism-templates/bento/blob/main/src/app/page.tsx
